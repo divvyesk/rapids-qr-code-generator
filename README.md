@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Rapids QR Code Generator
+
+A premium, interactive React (Next.js) web application designed to generate high-fidelity, offline-ready QR codes for website URLs and detailed contact cards.
+
+Built with a sleek, glassmorphic dark-mode interface and an interactive cursor-tracking spotlight background effect.
+
+## Key Features
+
+-   **Dual Mode Input**:
+    -   **URL Tab**: Input web links with a single-click paste function.
+    -   **Contact Card Tab**: Multi-field form for First Name, Last Name, Organization, Email, and Location Address.
+-   **Dynamic Fields**:
+    -   Add **multiple phone numbers** dynamically via `+` buttons.
+    -   Add **multiple website URLs** dynamically via `+` buttons.
+-   **Static Offline vCards**:
+    -   Generates QR codes containing direct, raw vCard (VCF) data.
+    -   Requires **no internet connection** to parse. Scanning with any built-in iOS or Android camera app instantly triggers the OS-native "Add to Contacts" screen.
+-   **Premium UI/UX Design**:
+    -   Aesthetic space-obsidian color palette with indigo-cyan glowing borders and gradients.
+    -   Global interactive spotlight background that tracks mouse movements.
+    -   Haptic-inspired button pressed states and layout animations.
+    -   100% Vector SVG icons (no standard text emojis).
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+Make sure you have Node.js (version 18 or later) installed.
+
+### Installation
+
+1.  Clone or download the project folder.
+2.  Install dependencies:
+    ```bash
+    npm install
+    ```
+
+### Running Locally
+
+To launch the local development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) with your mobile or desktop browser to view the application.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## Vercel Deployment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This project is fully serverless-ready and optimized for Vercel:
 
-## Learn More
+1.  Commit and push your files to a Git repository (GitHub/GitLab/Bitbucket).
+2.  Import your repository into the [Vercel Dashboard](https://vercel.com/dashboard).
+3.  Vercel will auto-detect Next.js. Click **Deploy**.
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Alternatively, deploy directly via the Vercel CLI:
+```bash
+npx vercel
+```
