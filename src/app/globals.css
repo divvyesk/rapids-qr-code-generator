@@ -499,6 +499,39 @@ body::after {
   gap: 0.4rem;
 }
 
+/* Download button group */
+.download-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+  margin-top: 0.5rem;
+}
+
+.btn-svg {
+  margin-top: 0;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+  position: relative;
+  gap: 0.5rem;
+}
+
+.btn-png {
+  margin-top: 0;
+  font-size: 0.95rem;
+  padding: 0.9rem 1.8rem;
+}
+
+.btn-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 /* Footer Section */
 .app-footer {
   text-align: center;

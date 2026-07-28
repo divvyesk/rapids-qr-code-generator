@@ -1,9 +1,7 @@
-"use strict";
-
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { QRCodeCanvas } from "qrcode.react";
+import { QRCodeCanvas, QRCodeSVG } from "qrcode.react";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("url"); // 'url' or 'contact'
@@ -27,6 +25,7 @@ export default function Home() {
   const [contactForm, setContactForm] = useState({
     firstName: "",
     lastName: "",
+    jobTitle: "",
     organization: "",
     email: "",
     street: "",
@@ -47,7 +46,8 @@ export default function Home() {
   const [generatedType, setGeneratedType] = useState(""); // 'url' or 'contact'
   const [errorMsg, setErrorMsg] = useState("");
 
-  const qrRef = useRef(null);
+  const qrCanvasRef = useRef(null);
+  const qrSvgRef = useRef(null);
 
   const handleContactChange = (e) => {
     const { name, value } = e.target;
@@ -136,6 +136,7 @@ export default function Home() {
         `N:${contactForm.lastName};${contactForm.firstName};;;`,
         `FN:${contactForm.firstName} ${contactForm.lastName}`.trim(),
         contactForm.organization ? `ORG:${contactForm.organization}` : "",
+        contactForm.jobTitle ? `TITLE:${contactForm.jobTitle}` : "",
         contactForm.email ? `EMAIL;TYPE=INTERNET,PREF:${contactForm.email}` : "",
         ...activePhones.map((phone, i) => `TEL;TYPE=CELL${i === 0 ? ",PREF" : ""}:${phone.trim()}`),
         (contactForm.street || contactForm.city || contactForm.region || contactForm.postcode || contactForm.country)
@@ -150,10 +151,10 @@ export default function Home() {
     }
   };
 
-  // Download QR code image
-  const handleDownloadQr = () => {
-    if (!qrRef.current) return;
-    const canvas = qrRef.current.querySelector("canvas");
+  // Download QR code as PNG
+  const handleDownloadPng = () => {
+    if (!qrCanvasRef.current) return;
+    const canvas = qrCanvasRef.current.querySelector("canvas");
     if (!canvas) return;
 
     try {
@@ -165,7 +166,36 @@ export default function Home() {
       link.click();
       document.body.removeChild(link);
     } catch (err) {
-      console.error("Failed to download QR code:", err);
+      console.error("Failed to download QR code as PNG:", err);
+    }
+  };
+
+  // Download QR code as SVG
+  const handleDownloadSvg = () => {
+    if (!qrSvgRef.current) return;
+    const svgEl = qrSvgRef.current.querySelector("svg");
+    if (!svgEl) return;
+
+    try {
+      const serializer = new XMLSerializer();
+      let svgStr = serializer.serializeToString(svgEl);
+
+      // Ensure proper XML namespace
+      if (!svgStr.includes('xmlns="http://www.w3.org/2000/svg"')) {
+        svgStr = svgStr.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+
+      const blob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.download = `qrcode_${generatedType}_${Date.now()}.svg`;
+      link.href = url;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to download QR code as SVG:", err);
     }
   };
 
@@ -286,6 +316,18 @@ export default function Home() {
                   </div>
 
                   <div className="form-group">
+                    <label className="form-label">Job Title</label>
+                    <input
+                      type="text"
+                      name="jobTitle"
+                      value={contactForm.jobTitle}
+                      onChange={handleContactChange}
+                      placeholder="Software Engineer"
+                      className="form-input"
+                    />
+                  </div>
+
+                  <div className="form-group">
                     <label className="form-label">Company / Organization</label>
                     <input
                       type="text"
@@ -297,7 +339,7 @@ export default function Home() {
                     />
                   </div>
 
-                  <div className="form-group">
+                  <div className="form-group full-width">
                     <label className="form-label">Email Address</label>
                     <input
                       type="email"
@@ -494,12 +536,23 @@ export default function Home() {
                   : "Static Offline vCard (No internet required)"}
               </p>
 
-              <div className="qr-container" ref={qrRef}>
+              {/* Visible QR (Canvas) */}
+              <div className="qr-container" ref={qrCanvasRef}>
                 <QRCodeCanvas
                   value={qrValue}
                   size={200}
                   level="M"
                   includeMargin={false}
+                />
+              </div>
+
+              {/* Hidden SVG QR for SVG download */}
+              <div ref={qrSvgRef} style={{ display: "none" }}>
+                <QRCodeSVG
+                  value={qrValue}
+                  size={512}
+                  level="M"
+                  includeMargin={true}
                 />
               </div>
 
@@ -519,9 +572,18 @@ export default function Home() {
                 Scan with iOS or Android camera app to import contact natively
               </p>
 
-              <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem", width: "100%" }}>
-                <button onClick={handleDownloadQr} className="btn" style={{ flex: 1, marginTop: 0 }}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18" style={{ marginRight: "6px" }}>
+              <div className="download-buttons">
+                <button onClick={handleDownloadSvg} className="btn btn-svg" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  Download SVG
+                  <span className="btn-badge">Recommended</span>
+                </button>
+                <button onClick={handleDownloadPng} className="btn btn-secondary btn-png" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                     <polyline points="7 10 12 15 17 10" />
                     <line x1="12" y1="15" x2="12" y2="3" />
@@ -539,7 +601,7 @@ export default function Home() {
                 <rect x="7" y="14" width="3" height="3" />
                 <rect x="14" y="14" width="3" height="3" />
               </svg>
-              <span>Fill details & click Generate</span>
+              <span>Fill details &amp; click Generate</span>
             </div>
           )}
         </section>
