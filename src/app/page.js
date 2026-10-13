@@ -12,7 +12,9 @@ const PHONE_ICON_PROPS = {
   strokeLinecap: "round", strokeLinejoin: "round", width: "15", height: "15"
 };
 
-// Phone number types, mapped to the vCard TEL TYPE values that iOS & Android display as labels
+// Phone number types, mapped to vCard TEL TYPE values. Each number also carries an Apple custom
+// label (X-ABLabel) so iOS shows exactly `label` — its built-in names are lowercase ("mobile")
+// or the raw type ("VOICE"). Android ignores the label and reads the standard TYPE.
 const PHONE_TYPES = [
   {
     value: "mobile", label: "Mobile", vcardType: "CELL", placeholder: "98765 43210",
@@ -235,9 +237,14 @@ export default function Home() {
         contactForm.organization ? `ORG:${contactForm.organization}` : "",
         contactForm.jobTitle ? `TITLE:${contactForm.jobTitle}` : "",
         contactForm.email ? `EMAIL;TYPE=INTERNET,PREF:${contactForm.email}` : "",
-        ...activePhones.map((phone, i) => {
+        ...activePhones.flatMap((phone, i) => {
           const phoneType = getPhoneType(phone.type);
-          return `TEL;TYPE=${phoneType.vcardType}${i === 0 ? ",PREF" : ""}:${toInternational(phone.countryCode, phone.number)}`;
+          // Group the number with its label ("item1.TEL" + "item1.X-ABLabel") so iOS pairs them
+          const group = `item${i + 1}`;
+          return [
+            `${group}.TEL;TYPE=${phoneType.vcardType}${i === 0 ? ",PREF" : ""}:${toInternational(phone.countryCode, phone.number)}`,
+            `${group}.X-ABLabel:${phoneType.label}`
+          ];
         }),
         (contactForm.street || contactForm.city || contactForm.region || contactForm.postcode || contactForm.country)
           ? `ADR;TYPE=WORK,POSTAL:;;${contactForm.street || ""};${contactForm.city || ""};${contactForm.region || ""};${contactForm.postcode || ""};${contactForm.country || ""}`
@@ -603,14 +610,6 @@ export default function Home() {
                   </div>
                   <div ref={qrSvgRef} hidden>
                     <QRCodeSVG value={qrValue} size={512} level="M" marginSize={4} />
-                  </div>
-
-                  <div className="payload">
-                    <div className="payload-bar">
-                      <span>payload</span>
-                      <span>{qrValue.split("\r\n").length} {qrValue.includes("\r\n") ? "lines" : "line"}</span>
-                    </div>
-                    <pre className="payload-body">{qrValue.replaceAll("\r\n", "\n")}</pre>
                   </div>
 
                   <p className="hint scan-hint">
