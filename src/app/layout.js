@@ -1,24 +1,33 @@
-import { Geist, Geist_Mono } from "next/font/google";
+import { JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+// Display face for headings (Magical Night by Viswell Studio)
+const magicalNight = localFont({
+  src: "./fonts/MagicalNight-Regular.otf",
+  variable: "--font-display",
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+// Monospace for the interface & ASCII art
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-mono",
   subsets: ["latin"],
+  weight: ["300", "400", "500", "700"],
 });
 
 export const metadata = {
   title: "Rapids QR Generator",
-  description: "Generate premium, highly compatible QR codes for website links and VCF contact cards.",
+  description: "Generate offline, static QR codes for website links and vCard contact cards.",
+};
+
+export const viewport = {
+  themeColor: "#000000",
 };
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="en" className={`${magicalNight.variable} ${jetbrainsMono.variable}`}>
       <body>{children}</body>
     </html>
   );

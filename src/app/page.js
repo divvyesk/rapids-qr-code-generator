@@ -2,21 +2,61 @@
 
 import { useState, useRef, useEffect } from "react";
 import { QRCodeCanvas, QRCodeSVG } from "qrcode.react";
+import { COUNTRIES, DEFAULT_COUNTRY, getCountry, toInternational } from "./countries";
+import AsciiField from "./components/AsciiField";
+import AsciiQrIdle from "./components/AsciiQrIdle";
+import AsciiWordmark from "./components/AsciiWordmark";
+
+const PHONE_ICON_PROPS = {
+  viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.75",
+  strokeLinecap: "round", strokeLinejoin: "round", width: "15", height: "15"
+};
+
+// Phone number types, mapped to the vCard TEL TYPE values that iOS & Android display as labels
+const PHONE_TYPES = [
+  {
+    value: "mobile", label: "Mobile", vcardType: "CELL", placeholder: "98765 43210",
+    icon: <svg {...PHONE_ICON_PROPS}><rect x="5" y="2" width="14" height="20" rx="2" ry="2" /><line x1="12" y1="18" x2="12.01" y2="18" /></svg>
+  },
+  {
+    value: "phone", label: "Phone", vcardType: "VOICE", placeholder: "22 2345 6789",
+    icon: <svg {...PHONE_ICON_PROPS}><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" /></svg>
+  },
+  {
+    value: "fax", label: "Fax", vcardType: "FAX", placeholder: "22 2345 6790",
+    icon: (
+      <svg {...PHONE_ICON_PROPS}>
+        <polyline points="6 9 6 2 18 2 18 9" />
+        <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+        <rect x="6" y="14" width="12" height="8" />
+      </svg>
+    )
+  }
+];
+
+// Stable ids keep each row's DOM (and focus) attached to its number while reordering
+let nextPhoneId = 0;
+const newPhone = () => ({ id: nextPhoneId++, type: "mobile", countryCode: DEFAULT_COUNTRY, number: "" });
+
+const getPhoneType = (value) => PHONE_TYPES.find((t) => t.value === value) || PHONE_TYPES[0];
+
+const Chevron = () => (
+  <svg className="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" width="12" height="12">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
+// Numbered section heading: "01 ── Personal ─────────"
+const SectionHead = ({ index, title }) => (
+  <div className="section-head">
+    <span className="section-index">{index}</span>
+    <h3 className="section-title">{title}</h3>
+    <span className="section-rule" aria-hidden="true" />
+  </div>
+);
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("url"); // 'url' or 'contact'
-
-  // Global mousemove spotlight listener
-  useEffect(() => {
-    const handleMouseMove = (e) => {
-      document.documentElement.style.setProperty("--mouse-x", `${e.clientX}px`);
-      document.documentElement.style.setProperty("--mouse-y", `${e.clientY}px`);
-    };
-    window.addEventListener("mousemove", handleMouseMove);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-    };
-  }, []);
 
   // URL Tab State
   const [urlInput, setUrlInput] = useState("");
@@ -36,7 +76,10 @@ export default function Home() {
   });
 
   // Multiple Phone Numbers State (Initial state with 1 compulsory empty field)
-  const [phones, setPhones] = useState([""]);
+  const [phones, setPhones] = useState(() => [newPhone()]);
+  const [draggingPhoneId, setDraggingPhoneId] = useState(null);
+  const draggingPhoneIdRef = useRef(null); // read synchronously in pointermove, before state re-renders
+  const phoneListRef = useRef(null);
 
   // Multiple URLs State (Initial state with 1 empty field)
   const [urls, setUrls] = useState([""]);
@@ -45,9 +88,18 @@ export default function Home() {
   const [qrValue, setQrValue] = useState("");
   const [generatedType, setGeneratedType] = useState(""); // 'url' or 'contact'
   const [errorMsg, setErrorMsg] = useState("");
+  const [generationCount, setGenerationCount] = useState(0); // bumps on every successful Generate, even with identical data
 
   const qrCanvasRef = useRef(null);
   const qrSvgRef = useRef(null);
+  const outputRef = useRef(null);
+
+  // On single-column layouts the output sits below the form, so bring it into view
+  useEffect(() => {
+    if (generationCount && window.matchMedia("(max-width: 960px)").matches) {
+      outputRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [generationCount]);
 
   const handleContactChange = (e) => {
     const { name, value } = e.target;
@@ -55,19 +107,58 @@ export default function Home() {
   };
 
   // Phone number handlers
-  const handlePhoneChange = (index, value) => {
+  const handlePhoneChange = (index, field, value) => {
     const updated = [...phones];
-    updated[index] = value;
+    updated[index] = { ...updated[index], [field]: value };
     setPhones(updated);
   };
 
   const addPhoneField = () => {
-    setPhones([...phones, ""]);
+    setPhones([...phones, newPhone()]);
   };
 
   const removePhoneField = (index) => {
     if (phones.length > 1) {
       setPhones(phones.filter((_, i) => i !== index));
+    }
+  };
+
+  const movePhone = (id, to) => {
+    setPhones((prev) => {
+      const from = prev.findIndex((p) => p.id === id);
+      if (to < 0 || to >= prev.length || from === to) return prev;
+      const updated = [...prev];
+      const [moved] = updated.splice(from, 1);
+      updated.splice(to, 0, moved);
+      return updated;
+    });
+  };
+
+  // Drag-to-reorder via the grip handle (pointer events cover both mouse and touch)
+  const handlePhoneDragStart = (e, id) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    draggingPhoneIdRef.current = id;
+    setDraggingPhoneId(id);
+  };
+
+  const handlePhoneDragMove = (e, id) => {
+    if (draggingPhoneIdRef.current !== id) return;
+    const rows = [...phoneListRef.current.querySelectorAll(".phone-row")];
+    let target = rows.findIndex((row) => e.clientY < row.getBoundingClientRect().bottom);
+    if (target === -1) target = rows.length - 1;
+    movePhone(id, target);
+  };
+
+  const handlePhoneDragEnd = () => {
+    draggingPhoneIdRef.current = null;
+    setDraggingPhoneId(null);
+  };
+
+  const handlePhoneHandleKeyDown = (e, id, index) => {
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      movePhone(id, index + (e.key === "ArrowUp" ? -1 : 1));
     }
   };
 
@@ -98,6 +189,11 @@ export default function Home() {
     }
   };
 
+  const switchTab = (tab) => {
+    setActiveTab(tab);
+    setErrorMsg("");
+  };
+
   // Form submission / QR Generation
   const handleGenerate = (e) => {
     e.preventDefault();
@@ -106,7 +202,7 @@ export default function Home() {
 
     if (activeTab === "url") {
       if (!urlInput.trim()) {
-        setErrorMsg("Please enter or paste a valid URL.");
+        setErrorMsg("Enter or paste a URL first.");
         return;
       }
 
@@ -118,15 +214,16 @@ export default function Home() {
 
       setQrValue(finalUrl);
       setGeneratedType("url");
+      setGenerationCount((n) => n + 1);
     } else {
       // Validate compulsory fields
       if (!contactForm.firstName.trim()) {
-        setErrorMsg("First Name is a compulsory field.");
+        setErrorMsg("First name is required.");
         return;
       }
 
       // Filter empty entries
-      const activePhones = phones.filter(p => p.trim() !== "");
+      const activePhones = phones.filter(p => p.number.trim() !== "");
       const activeUrls = urls.filter(u => u.trim() !== "");
 
       // Static Offline vCard format (Directly stored in QR code)
@@ -138,7 +235,10 @@ export default function Home() {
         contactForm.organization ? `ORG:${contactForm.organization}` : "",
         contactForm.jobTitle ? `TITLE:${contactForm.jobTitle}` : "",
         contactForm.email ? `EMAIL;TYPE=INTERNET,PREF:${contactForm.email}` : "",
-        ...activePhones.map((phone, i) => `TEL;TYPE=CELL${i === 0 ? ",PREF" : ""}:${phone.trim()}`),
+        ...activePhones.map((phone, i) => {
+          const phoneType = getPhoneType(phone.type);
+          return `TEL;TYPE=${phoneType.vcardType}${i === 0 ? ",PREF" : ""}:${toInternational(phone.countryCode, phone.number)}`;
+        }),
         (contactForm.street || contactForm.city || contactForm.region || contactForm.postcode || contactForm.country)
           ? `ADR;TYPE=WORK,POSTAL:;;${contactForm.street || ""};${contactForm.city || ""};${contactForm.region || ""};${contactForm.postcode || ""};${contactForm.country || ""}`
           : "",
@@ -148,10 +248,11 @@ export default function Home() {
 
       setQrValue(vcard);
       setGeneratedType("contact");
+      setGenerationCount((n) => n + 1);
     }
   };
 
-  // Download QR code as PNG
+  // Download QR code as PNG (from the hidden high-resolution canvas)
   const handleDownloadPng = () => {
     if (!qrCanvasRef.current) return;
     const canvas = qrCanvasRef.current.querySelector("canvas");
@@ -199,418 +300,357 @@ export default function Home() {
     }
   };
 
+  const payloadBytes = qrValue ? new TextEncoder().encode(qrValue).length : 0;
+
   return (
-    <div className="container">
-      {/* Header */}
-      <header className="app-header">
-        <div className="logo-container">
-          <div className="logo-icon">QR</div>
-          <h1 className="app-title">Rapids QR</h1>
-        </div>
-        <p className="app-subtitle">
-          Generate premium offline QR codes. Scan to directly save contact information natively on your mobile phone.
-        </p>
-      </header>
+    <>
+      <AsciiField />
 
-      {/* Main Grid */}
-      <main className="layout-grid">
-        {/* Left Side: Inputs Form */}
-        <section className="glass-card form-section">
-          {/* Tab Selection */}
-          <div className="tabs">
-            <button
-              onClick={() => {
-                setActiveTab("url");
-                setErrorMsg("");
-              }}
-              className={`tab-btn ${activeTab === "url" ? "active" : ""}`}
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="2" y1="12" x2="22" y2="12" />
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-              </svg>
-              URL / Website Link
-            </button>
-            <button
-              onClick={() => {
-                setActiveTab("contact");
-                setErrorMsg("");
-              }}
-              className={`tab-btn ${activeTab === "contact" ? "active" : ""}`}
-              type="button"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
-              Contact Info Card
-            </button>
-          </div>
+      <div className="shell">
+        {/* Top bar */}
+        <header className="topbar">
+          <span className="topbar-brand">rapids<span className="topbar-slash">/</span>qr</span>
+          <span className="topbar-meta">
+            <span>v2.0</span>
+            <span className="topbar-dot" aria-hidden="true">·</span>
+            <span>offline</span>
+            <span className="topbar-dot" aria-hidden="true">·</span>
+            <span>static</span>
+            <span className="topbar-dot hide-sm" aria-hidden="true">·</span>
+            <span className="hide-sm">no tracking</span>
+          </span>
+        </header>
 
-          <form onSubmit={handleGenerate}>
-            {activeTab === "url" ? (
-              /* URL INPUT TAB */
-              <div className="form-group" style={{ gap: "1rem" }}>
-                <h3 className="form-title">Enter Link Details</h3>
-                <div style={{ display: "flex", gap: "0.75rem" }}>
-                  <input
-                    type="text"
-                    value={urlInput}
-                    onChange={(e) => setUrlInput(e.target.value)}
-                    placeholder="https://example.com"
-                    className="form-input"
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    onClick={handlePasteUrl}
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ padding: "0.85rem 1.25rem" }}
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16" style={{ marginRight: "6px" }}>
-                      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                      <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-                    </svg>
-                    Paste
-                  </button>
-                </div>
-                <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-                  Enter any website URL. When scanned, it redirects the user directly to the website.
-                </p>
-              </div>
-            ) : (
-              /* CONTACT INFO FORM TAB */
-              <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-                <h3 className="form-title">Personal Details</h3>
+        {/* Hero */}
+        <section className="hero">
+          <p className="eyebrow">[ qr code generator ]</p>
+          <h1 className="hero-title">Rapids QR</h1>
+          <p className="hero-sub">
+            <span className="prompt" aria-hidden="true">&gt;</span> Static QR codes for links &amp; contact cards. Generated in your browser, scanned straight into your phone.<span className="cursor" aria-hidden="true" />
+          </p>
+        </section>
 
-                <div className="form-grid">
-                  <div className="form-group">
-                    <label className="form-label">
-                      First Name <span className="required-badge">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      name="firstName"
-                      value={contactForm.firstName}
-                      onChange={handleContactChange}
-                      placeholder="John"
-                      className="form-input"
-                      required
-                    />
-                  </div>
+        <main className="workspace">
+          {/* Left: input */}
+          <section className="panel panel-input">
+            <div className="panel-bar">
+              <span>┌─ input</span>
+              <span>{activeTab === "url" ? "mode: link" : "mode: vcard 3.0"}</span>
+            </div>
 
-                  <div className="form-group">
-                    <label className="form-label">Last Name</label>
-                    <input
-                      type="text"
-                      name="lastName"
-                      value={contactForm.lastName}
-                      onChange={handleContactChange}
-                      placeholder="Doe"
-                      className="form-input"
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Job Title</label>
-                    <input
-                      type="text"
-                      name="jobTitle"
-                      value={contactForm.jobTitle}
-                      onChange={handleContactChange}
-                      placeholder="Software Engineer"
-                      className="form-input"
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Company / Organization</label>
-                    <input
-                      type="text"
-                      name="organization"
-                      value={contactForm.organization}
-                      onChange={handleContactChange}
-                      placeholder="Acme Corp"
-                      className="form-input"
-                    />
-                  </div>
-
-                  <div className="form-group full-width">
-                    <label className="form-label">Email Address</label>
-                    <input
-                      type="email"
-                      name="email"
-                      value={contactForm.email}
-                      onChange={handleContactChange}
-                      placeholder="john.doe@example.com"
-                      className="form-input"
-                    />
-                  </div>
-                </div>
-
-                {/* Multiple Phone Numbers Section */}
-                <div className="form-group" style={{ gap: "0.75rem" }}>
-                  <label className="form-label">
-                    Mobile / Phone Numbers
-                  </label>
-                  {phones.map((phone, index) => (
-                    <div key={index} className="dynamic-row">
-                      <input
-                        type="tel"
-                        value={phone}
-                        onChange={(e) => handlePhoneChange(index, e.target.value)}
-                        placeholder={index === 0 ? "e.g. +1 (555) 019-2834" : `Phone #${index + 1}`}
-                        className="form-input"
-                        style={{ flex: 1 }}
-                      />
-                      {phones.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removePhoneField(index)}
-                          className="delete-row-btn"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={addPhoneField}
-                    className="add-row-btn"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="14" height="14" style={{ marginRight: "4px" }}>
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                    Add Phone Number
-                  </button>
-                </div>
-
-                {/* Multiple Website URLs Section */}
-                <div className="form-group" style={{ gap: "0.75rem" }}>
-                  <label className="form-label">Website URLs</label>
-                  {urls.map((url, index) => (
-                    <div key={index} className="dynamic-row">
-                      <input
-                        type="text"
-                        value={url}
-                        onChange={(e) => handleUrlChange(index, e.target.value)}
-                        placeholder={`https://example.com/profile${index > 0 ? index + 1 : ""}`}
-                        className="form-input"
-                        style={{ flex: 1 }}
-                      />
-                      {urls.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeUrlField(index)}
-                          className="delete-row-btn"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={addUrlField}
-                    className="add-row-btn"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="14" height="14" style={{ marginRight: "4px" }}>
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
-                    Add URL
-                  </button>
-                </div>
-
-                <h3 className="form-title" style={{ marginTop: "1rem" }}>Address Details</h3>
-                <div className="form-grid">
-                  <div className="form-group full-width">
-                    <label className="form-label">Street Address</label>
-                    <input
-                      type="text"
-                      name="street"
-                      value={contactForm.street}
-                      onChange={handleContactChange}
-                      placeholder="123 Main St"
-                      className="form-input"
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">City</label>
-                    <input
-                      type="text"
-                      name="city"
-                      value={contactForm.city}
-                      onChange={handleContactChange}
-                      placeholder="San Francisco"
-                      className="form-input"
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">State / Region</label>
-                    <input
-                      type="text"
-                      name="region"
-                      value={contactForm.region}
-                      onChange={handleContactChange}
-                      placeholder="CA"
-                      className="form-input"
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Postcode / ZIP</label>
-                    <input
-                      type="text"
-                      name="postcode"
-                      value={contactForm.postcode}
-                      onChange={handleContactChange}
-                      placeholder="94105"
-                      className="form-input"
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Country</label>
-                    <input
-                      type="text"
-                      name="country"
-                      value={contactForm.country}
-                      onChange={handleContactChange}
-                      placeholder="United States"
-                      className="form-input"
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {errorMsg && (
-              <div
-                style={{
-                  color: "var(--error)",
-                  fontSize: "0.9rem",
-                  marginTop: "1.5rem",
-                  background: "rgba(239, 68, 68, 0.1)",
-                  padding: "0.75rem 1rem",
-                  borderRadius: "var(--radius-sm)",
-                  border: "1px solid rgba(239, 68, 68, 0.2)",
-                  display: "flex",
-                  alignItems: "center"
-                }}
+            <div className="tabs" role="tablist">
+              <button
+                onClick={() => switchTab("url")}
+                className={`tab ${activeTab === "url" ? "active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "url"}
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18" style={{ marginRight: "8px", flexShrink: 0 }}>
-                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                  <line x1="12" y1="9" x2="12" y2="13" />
-                  <line x1="12" y1="17" x2="12.01" y2="17" />
-                </svg>
-                {errorMsg}
-              </div>
-            )}
-
-            <button type="submit" className="btn" style={{ width: "100%" }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18" style={{ marginRight: "6px" }}>
-                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-              </svg>
-              Generate QR Code
-            </button>
-          </form>
-        </section>
-
-        {/* Right Side: Generated Output Preview */}
-        <section className="glass-card output-section">
-          {qrValue ? (
-            <div className="qr-wrapper">
-              <h3 style={{ fontSize: "1.25rem", color: "var(--text-primary)" }}>Generated QR Code</h3>
-              <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-                {generatedType === "url"
-                  ? "Encoded Link"
-                  : "Static Offline vCard (No internet required)"}
-              </p>
-
-              {/* Visible QR (Canvas) */}
-              <div className="qr-container" ref={qrCanvasRef}>
-                <QRCodeCanvas
-                  value={qrValue}
-                  size={200}
-                  level="M"
-                  includeMargin={false}
-                />
-              </div>
-
-              {/* Hidden SVG QR for SVG download */}
-              <div ref={qrSvgRef} style={{ display: "none" }}>
-                <QRCodeSVG
-                  value={qrValue}
-                  size={512}
-                  level="M"
-                  includeMargin={true}
-                />
-              </div>
-
-              <div style={{ maxWidth: "260px", wordBreak: "break-all", fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
-                <code>
-                  {generatedType === "url"
-                    ? (qrValue.length > 60 ? qrValue.substring(0, 57) + "..." : qrValue)
-                    : `vCard data (${qrValue.split("\n").length} fields)`}
-                </code>
-              </div>
-
-              <p className="scan-instructions">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
-                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                  <circle cx="12" cy="13" r="4" />
-                </svg>
-                Scan with iOS or Android camera app to import contact natively
-              </p>
-
-              <div className="download-buttons">
-                <button onClick={handleDownloadSvg} className="btn btn-svg" type="button">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                  Download SVG
-                  <span className="btn-badge">Recommended</span>
-                </button>
-                <button onClick={handleDownloadPng} className="btn btn-secondary btn-png" type="button">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                  Download PNG
-                </button>
-              </div>
+                <span className="tab-index">A/</span>
+                <span className="tab-name">Link</span>
+                <span className="tab-desc">url · website</span>
+              </button>
+              <button
+                onClick={() => switchTab("contact")}
+                className={`tab ${activeTab === "contact" ? "active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "contact"}
+              >
+                <span className="tab-index">B/</span>
+                <span className="tab-name">Contact</span>
+                <span className="tab-desc">vcard · offline</span>
+              </button>
             </div>
-          ) : (
-            <div className="qr-placeholder">
-              <svg viewBox="0 0 24 24" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <rect x="7" y="7" width="3" height="3" />
-                <rect x="14" y="7" width="3" height="3" />
-                <rect x="7" y="14" width="3" height="3" />
-                <rect x="14" y="14" width="3" height="3" />
-              </svg>
-              <span>Fill details &amp; click Generate</span>
-            </div>
-          )}
-        </section>
-      </main>
 
-      {/* Footer */}
-      <footer className="app-footer">
-        <p>&copy; {new Date().getFullYear()} Rapids QR Code Generator. 100% Offline Static QR codes.</p>
-      </footer>
-    </div>
+            <form onSubmit={handleGenerate} className="panel-body">
+              {activeTab === "url" ? (
+                /* URL INPUT TAB */
+                <div className="form-section">
+                  <SectionHead index="01" title="Destination" />
+                  <div className="field">
+                    <label className="field-label" htmlFor="url-input">Website URL</label>
+                    <div className="inline-row">
+                      <input
+                        id="url-input"
+                        type="text"
+                        value={urlInput}
+                        onChange={(e) => setUrlInput(e.target.value)}
+                        placeholder="https://example.com"
+                        className="input"
+                        autoComplete="url"
+                      />
+                      <button onClick={handlePasteUrl} type="button" className="btn-ghost">
+                        Paste
+                      </button>
+                    </div>
+                    <p className="hint">Scanning the code opens this link. https:// is added if you leave it out.</p>
+                  </div>
+                </div>
+              ) : (
+                /* CONTACT INFO FORM TAB */
+                <>
+                  <div className="form-section">
+                    <SectionHead index="01" title="Personal" />
+                    <div className="grid-2">
+                      <div className="field">
+                        <label className="field-label" htmlFor="firstName">First name <span className="req">*</span></label>
+                        <input id="firstName" type="text" name="firstName" value={contactForm.firstName} onChange={handleContactChange} placeholder="John" className="input" autoComplete="given-name" required />
+                      </div>
+                      <div className="field">
+                        <label className="field-label" htmlFor="lastName">Last name</label>
+                        <input id="lastName" type="text" name="lastName" value={contactForm.lastName} onChange={handleContactChange} placeholder="Doe" className="input" autoComplete="family-name" />
+                      </div>
+                      <div className="field">
+                        <label className="field-label" htmlFor="jobTitle">Job title</label>
+                        <input id="jobTitle" type="text" name="jobTitle" value={contactForm.jobTitle} onChange={handleContactChange} placeholder="Software Engineer" className="input" autoComplete="organization-title" />
+                      </div>
+                      <div className="field">
+                        <label className="field-label" htmlFor="organization">Company</label>
+                        <input id="organization" type="text" name="organization" value={contactForm.organization} onChange={handleContactChange} placeholder="Acme Corp" className="input" autoComplete="organization" />
+                      </div>
+                      <div className="field span-2">
+                        <label className="field-label" htmlFor="email">Email</label>
+                        <input id="email" type="email" name="email" value={contactForm.email} onChange={handleContactChange} placeholder="john.doe@example.com" className="input" autoComplete="email" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Multiple Phone Numbers Section */}
+                  <div className="form-section">
+                    <SectionHead index="02" title="Numbers" />
+                    <div className="field" ref={phoneListRef}>
+                      {phones.length > 1 && (
+                        <p className="hint hint-top">Drag ⠿ to reorder. The first number is saved as primary.</p>
+                      )}
+                      {phones.map((phone, index) => (
+                        <div key={phone.id} className={`row phone-row ${draggingPhoneId === phone.id ? "dragging" : ""}`}>
+                          {phones.length > 1 && (
+                            <button
+                              type="button"
+                              className="drag-handle"
+                              aria-label={`Reorder phone #${index + 1} (drag, or use arrow keys)`}
+                              onPointerDown={(e) => handlePhoneDragStart(e, phone.id)}
+                              onPointerMove={(e) => handlePhoneDragMove(e, phone.id)}
+                              onPointerUp={handlePhoneDragEnd}
+                              onPointerCancel={handlePhoneDragEnd}
+                              onKeyDown={(e) => handlePhoneHandleKeyDown(e, phone.id, index)}
+                            >
+                              ⠿
+                            </button>
+                          )}
+                          <div className="phone-field">
+                            <div className="segment phone-type">
+                              {getPhoneType(phone.type).icon}
+                              <span className="phone-type-label">{getPhoneType(phone.type).label}</span>
+                              <Chevron />
+                              <select
+                                value={phone.type}
+                                onChange={(e) => handlePhoneChange(index, "type", e.target.value)}
+                                className="segment-select"
+                                aria-label={`Phone #${index + 1} type`}
+                              >
+                                {PHONE_TYPES.map((t) => (
+                                  <option key={t.value} value={t.value}>{t.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="segment country-code">
+                              <span className="country-flag">{getCountry(phone.countryCode).flag}</span>
+                              <span>+{getCountry(phone.countryCode).dial}</span>
+                              <Chevron />
+                              <select
+                                value={phone.countryCode}
+                                onChange={(e) => handlePhoneChange(index, "countryCode", e.target.value)}
+                                className="segment-select"
+                                aria-label={`Phone #${index + 1} country code`}
+                              >
+                                {COUNTRIES.map((c) => (
+                                  <option key={c.iso} value={c.iso}>{c.flag} {c.name} (+{c.dial})</option>
+                                ))}
+                              </select>
+                            </div>
+                            <input
+                              type="tel"
+                              value={phone.number}
+                              onChange={(e) => handlePhoneChange(index, "number", e.target.value)}
+                              placeholder={getPhoneType(phone.type).placeholder}
+                              className="phone-number-input"
+                              aria-label={`Phone #${index + 1} number`}
+                            />
+                          </div>
+                          {phones.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removePhoneField(index)}
+                              className="btn-remove"
+                              aria-label={`Remove phone #${index + 1}`}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <button type="button" onClick={addPhoneField} className="btn-add">
+                        + add number
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Multiple Website URLs Section */}
+                  <div className="form-section">
+                    <SectionHead index="03" title="Links" />
+                    <div className="field">
+                      {urls.map((url, index) => (
+                        <div key={index} className="row">
+                          <input
+                            type="text"
+                            value={url}
+                            onChange={(e) => handleUrlChange(index, e.target.value)}
+                            placeholder={`https://example.com/profile${index > 0 ? index + 1 : ""}`}
+                            className="input"
+                            aria-label={`Website URL #${index + 1}`}
+                          />
+                          {urls.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeUrlField(index)}
+                              className="btn-remove"
+                              aria-label={`Remove URL #${index + 1}`}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <button type="button" onClick={addUrlField} className="btn-add">
+                        + add link
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="form-section">
+                    <SectionHead index="04" title="Address" />
+                    <div className="grid-2">
+                      <div className="field span-2">
+                        <label className="field-label" htmlFor="street">Street</label>
+                        <input id="street" type="text" name="street" value={contactForm.street} onChange={handleContactChange} placeholder="123 Main St" className="input" autoComplete="street-address" />
+                      </div>
+                      <div className="field">
+                        <label className="field-label" htmlFor="city">City</label>
+                        <input id="city" type="text" name="city" value={contactForm.city} onChange={handleContactChange} placeholder="Mumbai" className="input" autoComplete="address-level2" />
+                      </div>
+                      <div className="field">
+                        <label className="field-label" htmlFor="region">State / Region</label>
+                        <input id="region" type="text" name="region" value={contactForm.region} onChange={handleContactChange} placeholder="Maharashtra" className="input" autoComplete="address-level1" />
+                      </div>
+                      <div className="field">
+                        <label className="field-label" htmlFor="postcode">Postcode</label>
+                        <input id="postcode" type="text" name="postcode" value={contactForm.postcode} onChange={handleContactChange} placeholder="400001" className="input" autoComplete="postal-code" />
+                      </div>
+                      <div className="field">
+                        <label className="field-label" htmlFor="country">Country</label>
+                        <input id="country" type="text" name="country" value={contactForm.country} onChange={handleContactChange} placeholder="India" className="input" autoComplete="country-name" />
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {errorMsg && (
+                <div className="error" role="alert">
+                  <span className="error-tag">err</span>
+                  {errorMsg}
+                </div>
+              )}
+
+              <button type="submit" className="btn-generate">
+                <span className="btn-generate-label">Generate</span>
+                <span className="btn-generate-kbd">[ enter ↵ ]</span>
+              </button>
+            </form>
+          </section>
+
+          {/* Right: output */}
+          <aside className="panel panel-output" ref={outputRef}>
+            <div className="panel-bar">
+              <span>┌─ output</span>
+              <span className={qrValue ? "status-ready" : ""}>{qrValue ? "● ready" : "○ idle"}</span>
+            </div>
+
+            <div className="panel-body output-body">
+              {qrValue ? (
+                <div className="result" key={generationCount}>
+                  <h2 className="result-title">{generatedType === "url" ? "Your link" : "Your card"}</h2>
+                  <p className="result-meta">
+                    {generatedType === "url" ? "url" : "vcard 3.0"} · {payloadBytes} bytes · ecc m
+                  </p>
+
+                  {/* Visible QR */}
+                  <div className="qr-frame">
+                    <span className="qr-corner tl" aria-hidden="true">┌</span>
+                    <span className="qr-corner tr" aria-hidden="true">┐</span>
+                    <span className="qr-corner bl" aria-hidden="true">└</span>
+                    <span className="qr-corner br" aria-hidden="true">┘</span>
+                    <div className="qr-paper">
+                      <QRCodeSVG value={qrValue} size={208} level="M" marginSize={0} title="Generated QR code" />
+                    </div>
+                  </div>
+
+                  {/* Hidden high-resolution renders for downloads */}
+                  <div ref={qrCanvasRef} hidden>
+                    <QRCodeCanvas value={qrValue} size={1024} level="M" marginSize={4} />
+                  </div>
+                  <div ref={qrSvgRef} hidden>
+                    <QRCodeSVG value={qrValue} size={512} level="M" marginSize={4} />
+                  </div>
+
+                  <div className="payload">
+                    <div className="payload-bar">
+                      <span>payload</span>
+                      <span>{qrValue.split("\r\n").length} {qrValue.includes("\r\n") ? "lines" : "line"}</span>
+                    </div>
+                    <pre className="payload-body">{qrValue.replaceAll("\r\n", "\n")}</pre>
+                  </div>
+
+                  <p className="hint scan-hint">
+                    {generatedType === "url"
+                      ? "Point any phone camera at the code to open the link."
+                      : "Point an iOS or Android camera at the code to save the contact."}
+                  </p>
+
+                  <div className="downloads">
+                    <button onClick={handleDownloadSvg} className="btn-solid" type="button">
+                      ↓ SVG <span className="btn-note">vector · best for print</span>
+                    </button>
+                    <button onClick={handleDownloadPng} className="btn-outline" type="button">
+                      ↓ PNG <span className="btn-note">high-res</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="idle">
+                  <AsciiQrIdle />
+                  <p className="idle-caption">
+                    awaiting input<span className="cursor" aria-hidden="true" />
+                  </p>
+                  <p className="hint">Fill in the form and hit Generate. Your code appears here.</p>
+                </div>
+              )}
+            </div>
+          </aside>
+        </main>
+
+        {/* Footer */}
+        <footer className="footer">
+          <AsciiWordmark />
+          <div className="statusline">
+            <span className="statusline-mode">-- static --</span>
+            <span>100% offline · nothing leaves your browser</span>
+            <span>© {new Date().getFullYear()} rapids qr</span>
+          </div>
+        </footer>
+      </div>
+    </>
   );
 }
