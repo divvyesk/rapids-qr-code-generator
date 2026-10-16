@@ -307,7 +307,9 @@ export default function Home() {
             multipart: imageFile.size > 8 * 1024 * 1024,
             onUploadProgress: ({ percentage }) => setUploadProgress(Math.round(percentage)),
           });
-          url = blob.url;
+          // Point the QR at our save page (/i), which offers "Save to Photos" for the stored file
+          const store = new URL(blob.url).hostname.split(".")[0];
+          url = `${window.location.origin}/i?s=${store}&p=${blob.pathname}`;
           uploadedImageRef.current = { file: imageFile, url };
         }
         setQrValue(url);

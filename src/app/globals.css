@@ -926,6 +926,88 @@ button {
   font-weight: 700;
 }
 
+/* ---------- Save page (/i) ---------- */
+.save-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar-brand {
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.save-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 0;
+}
+
+.save-card,
+.save-empty {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.save-frame {
+  position: relative;
+  padding: 20px;
+  max-width: 100%;
+}
+
+.save-image {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  max-height: 60dvh;
+  object-fit: contain;
+  outline: 1px solid var(--line); /* keeps dark images from melting into the page */
+  animation: scan-reveal 0.7s steps(14) both;
+}
+
+.save-button {
+  margin-top: 20px;
+}
+
+.save-hint {
+  margin-top: 14px;
+  max-width: 40ch;
+}
+
+.save-title {
+  font-family: var(--display);
+  font-weight: normal;
+  font-size: 2.6rem;
+  line-height: 1;
+  margin-bottom: 14px;
+}
+
+.save-footer {
+  padding: 20px 0 28px;
+  border-top: 1px solid var(--line);
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.save-footer a {
+  color: var(--fg-3);
+  text-decoration: none;
+}
+
+.save-footer a:hover {
+  color: var(--fg);
+}
+
 /* ---------- Motion ---------- */
 @keyframes blink {
   50% { opacity: 0; }
