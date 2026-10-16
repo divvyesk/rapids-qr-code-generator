@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { QRCodeCanvas, QRCodeSVG } from "qrcode.react";
+import { upload } from "@vercel/blob/client";
 import { COUNTRIES, DEFAULT_COUNTRY, getCountry, toInternational } from "./countries";
 import AsciiField from "./components/AsciiField";
 import AsciiQrIdle from "./components/AsciiQrIdle";
@@ -42,6 +43,13 @@ const newPhone = () => ({ id: nextPhoneId++, type: "mobile", countryCode: DEFAUL
 
 const getPhoneType = (value) => PHONE_TYPES.find((t) => t.value === value) || PHONE_TYPES[0];
 
+// Image mode: originals are uploaded untouched to Vercel Blob (see app/api/upload/route.js)
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // keep in sync with the upload route
+
+const formatBytes = (bytes) =>
+  bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
 const Chevron = () => (
   <svg className="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" width="12" height="12">
     <polyline points="6 9 12 15 18 9" />
@@ -58,7 +66,7 @@ const SectionHead = ({ index, title }) => (
 );
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState("url"); // 'url' or 'contact'
+  const [activeTab, setActiveTab] = useState("url"); // 'url', 'contact' or 'image'
 
   // URL Tab State
   const [urlInput, setUrlInput] = useState("");
@@ -86,9 +94,18 @@ export default function Home() {
   // Multiple URLs State (Initial state with 1 empty field)
   const [urls, setUrls] = useState([""]);
 
+  // Image Tab State
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState("");
+  const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null); // null when idle, 0–100 while uploading
+  const previewUrlRef = useRef("");
+  const uploadedImageRef = useRef({ file: null, url: "" }); // regenerating the same file reuses its upload
+  const imageInputRef = useRef(null);
+
   // Generated Result State
   const [qrValue, setQrValue] = useState("");
-  const [generatedType, setGeneratedType] = useState(""); // 'url' or 'contact'
+  const [generatedType, setGeneratedType] = useState(""); // 'url', 'contact' or 'image'
   const [errorMsg, setErrorMsg] = useState("");
   const [generationCount, setGenerationCount] = useState(0); // bumps on every successful Generate, even with identical data
 
@@ -191,13 +208,69 @@ export default function Home() {
     }
   };
 
+  // Image handlers
+  const showPreview = (file) => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = file ? URL.createObjectURL(file) : "";
+    setImagePreview(previewUrlRef.current);
+  };
+
+  const selectImage = useCallback((file) => {
+    if (!file) return;
+    setErrorMsg("");
+    if (!IMAGE_TYPES.includes(file.type)) {
+      const isHeic = /heic|heif/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+      setErrorMsg(isHeic
+        ? "HEIC photos don't open on most Android phones or browsers. Export it as JPEG first."
+        : "Use a JPEG, PNG, WebP, GIF or AVIF image.");
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setErrorMsg(`That image is ${formatBytes(file.size)}. The limit is 20 MB.`);
+      return;
+    }
+    showPreview(file);
+    setImageFile(file);
+  }, []);
+
+  const clearImage = () => {
+    showPreview(null);
+    setImageFile(null);
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  };
+
+  const handleImageDrop = (e) => {
+    e.preventDefault();
+    setIsDraggingImage(false);
+    selectImage(e.dataTransfer.files?.[0]);
+  };
+
+  // Paste an image from the clipboard while the Image tab is open
+  useEffect(() => {
+    if (activeTab !== "image") return;
+    const onPaste = (e) => {
+      const file = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith("image/"));
+      if (file) {
+        e.preventDefault();
+        selectImage(file);
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [activeTab, selectImage]);
+
+  // Release the preview's object URL on unmount
+  useEffect(() => () => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+  }, []);
+
   const switchTab = (tab) => {
     setActiveTab(tab);
     setErrorMsg("");
   };
 
   // Form submission / QR Generation
-  const handleGenerate = (e) => {
+  const handleGenerate = async (e) => {
     e.preventDefault();
     setErrorMsg("");
     setQrValue("");
@@ -217,6 +290,34 @@ export default function Home() {
       setQrValue(finalUrl);
       setGeneratedType("url");
       setGenerationCount((n) => n + 1);
+    } else if (activeTab === "image") {
+      if (!imageFile) {
+        setErrorMsg("Choose an image first.");
+        return;
+      }
+
+      try {
+        let url = uploadedImageRef.current.file === imageFile ? uploadedImageRef.current.url : "";
+        if (!url) {
+          setUploadProgress(0);
+          // Straight from the browser to Vercel Blob, byte-for-byte; the route only issues a token
+          const blob = await upload(`images/${imageFile.name.replace(/[^a-z0-9._-]+/gi, "-")}`, imageFile, {
+            access: "public",
+            handleUploadUrl: "/api/upload",
+            multipart: imageFile.size > 8 * 1024 * 1024,
+            onUploadProgress: ({ percentage }) => setUploadProgress(Math.round(percentage)),
+          });
+          url = blob.url;
+          uploadedImageRef.current = { file: imageFile, url };
+        }
+        setQrValue(url);
+        setGeneratedType("image");
+        setGenerationCount((n) => n + 1);
+      } catch (err) {
+        setErrorMsg(`Upload failed${err?.message ? `: ${err.message}` : ". Check your connection and try again."}`);
+      } finally {
+        setUploadProgress(null);
+      }
     } else {
       // Validate compulsory fields
       if (!contactForm.firstName.trim()) {
@@ -333,7 +434,7 @@ export default function Home() {
           <p className="eyebrow">[ qr code generator ]</p>
           <h1 className="hero-title">Rapids QR</h1>
           <p className="hero-sub">
-            <span className="prompt" aria-hidden="true">&gt;</span> Static QR codes for links &amp; contact cards. Generated in your browser, scanned straight into your phone.<span className="cursor" aria-hidden="true" />
+            <span className="prompt" aria-hidden="true">&gt;</span> Static QR codes for links, contact cards &amp; images. Scanned straight into your phone.<span className="cursor" aria-hidden="true" />
           </p>
         </section>
 
@@ -342,7 +443,7 @@ export default function Home() {
           <section className="panel panel-input">
             <div className="panel-bar">
               <span>┌─ input</span>
-              <span>{activeTab === "url" ? "mode: link" : "mode: vcard 3.0"}</span>
+              <span>{{ url: "mode: link", contact: "mode: vcard 3.0", image: "mode: image" }[activeTab]}</span>
             </div>
 
             <div className="tabs" role="tablist">
@@ -368,10 +469,21 @@ export default function Home() {
                 <span className="tab-name">Contact</span>
                 <span className="tab-desc">vcard · offline</span>
               </button>
+              <button
+                onClick={() => switchTab("image")}
+                className={`tab ${activeTab === "image" ? "active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "image"}
+              >
+                <span className="tab-index">C/</span>
+                <span className="tab-name">Image</span>
+                <span className="tab-desc">upload · photo</span>
+              </button>
             </div>
 
             <form onSubmit={handleGenerate} className="panel-body">
-              {activeTab === "url" ? (
+              {activeTab === "url" && (
                 /* URL INPUT TAB */
                 <div className="form-section">
                   <SectionHead index="01" title="Destination" />
@@ -394,7 +506,9 @@ export default function Home() {
                     <p className="hint">Scanning the code opens this link. https:// is added if you leave it out.</p>
                   </div>
                 </div>
-              ) : (
+              )}
+
+              {activeTab === "contact" && (
                 /* CONTACT INFO FORM TAB */
                 <>
                   <div className="form-section">
@@ -564,6 +678,53 @@ export default function Home() {
                 </>
               )}
 
+              {activeTab === "image" && (
+                /* IMAGE UPLOAD TAB */
+                <div className="form-section">
+                  <SectionHead index="01" title="Image" />
+                  <div
+                    className="field"
+                    onDragOver={(e) => { e.preventDefault(); setIsDraggingImage(true); }}
+                    onDragLeave={() => setIsDraggingImage(false)}
+                    onDrop={handleImageDrop}
+                  >
+                    <input
+                      ref={imageInputRef}
+                      type="file"
+                      accept={IMAGE_TYPES.join(",")}
+                      className="visually-hidden"
+                      tabIndex={-1}
+                      onChange={(e) => selectImage(e.target.files?.[0])}
+                    />
+                    {imageFile ? (
+                      <div className={`image-preview ${isDraggingImage ? "dragging" : ""}`}>
+                        {/* eslint-disable-next-line @next/next/no-img-element -- local blob: preview, nothing for next/image to optimize */}
+                        <img src={imagePreview} alt="Selected image" />
+                        <div className="image-info">
+                          <span className="image-name">{imageFile.name}</span>
+                          <span className="image-size">{formatBytes(imageFile.size)} · uploaded at full quality</span>
+                          <div className="image-actions">
+                            <button type="button" className="btn-ghost" onClick={() => imageInputRef.current?.click()}>Replace</button>
+                            <button type="button" className="btn-ghost" onClick={clearImage}>Remove</button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className={`dropzone ${isDraggingImage ? "dragging" : ""}`}
+                        onClick={() => imageInputRef.current?.click()}
+                      >
+                        <span className="dropzone-icon" aria-hidden="true">[ + ]</span>
+                        <span className="dropzone-title">Upload image</span>
+                        <span className="dropzone-sub">click, drop or paste · jpg png webp gif avif · max 20 mb</span>
+                      </button>
+                    )}
+                    <p className="hint">Your image is stored as-is, at full quality, so the code can link to it. Anyone with the code or its link can view it.</p>
+                  </div>
+                </div>
+              )}
+
               {errorMsg && (
                 <div className="error" role="alert">
                   <span className="error-tag">err</span>
@@ -571,9 +732,9 @@ export default function Home() {
                 </div>
               )}
 
-              <button type="submit" className="btn-generate">
-                <span className="btn-generate-label">Generate</span>
-                <span className="btn-generate-kbd">[ enter ↵ ]</span>
+              <button type="submit" className="btn-generate" disabled={uploadProgress !== null}>
+                <span className="btn-generate-label">{uploadProgress !== null ? "Uploading" : "Generate"}</span>
+                <span className="btn-generate-kbd">{uploadProgress !== null ? `[ ${uploadProgress}% ]` : "[ enter ↵ ]"}</span>
               </button>
             </form>
           </section>
@@ -588,9 +749,9 @@ export default function Home() {
             <div className="panel-body output-body">
               {qrValue ? (
                 <div className="result" key={generationCount}>
-                  <h2 className="result-title">{generatedType === "url" ? "Your link" : "Your card"}</h2>
+                  <h2 className="result-title">{{ url: "Your link", contact: "Your card", image: "Your image" }[generatedType]}</h2>
                   <p className="result-meta">
-                    {generatedType === "url" ? "url" : "vcard 3.0"} · {payloadBytes} bytes · ecc m
+                    {{ url: "url", contact: "vcard 3.0", image: "image link" }[generatedType]} · {payloadBytes} bytes · ecc m
                   </p>
 
                   {/* Visible QR */}
@@ -613,10 +774,18 @@ export default function Home() {
                   </div>
 
                   <p className="hint scan-hint">
-                    {generatedType === "url"
-                      ? "Point any phone camera at the code to open the link."
-                      : "Point an iOS or Android camera at the code to save the contact."}
+                    {{
+                      url: "Point any phone camera at the code to open the link.",
+                      contact: "Point an iOS or Android camera at the code to save the contact.",
+                      image: "Point any phone camera at the code to open the image.",
+                    }[generatedType]}
                   </p>
+
+                  {generatedType === "image" && (
+                    <a className="result-link" href={qrValue} target="_blank" rel="noreferrer">
+                      open image ↗
+                    </a>
+                  )}
 
                   <div className="downloads">
                     <button onClick={handleDownloadSvg} className="btn-solid" type="button">
@@ -645,7 +814,7 @@ export default function Home() {
           <AsciiWordmark />
           <div className="statusline">
             <span className="statusline-mode">-- static --</span>
-            <span>100% offline · nothing leaves your browser</span>
+            <span>links &amp; contacts never leave your browser</span>
             <span>© {new Date().getFullYear()} rapids qr</span>
           </div>
         </footer>
