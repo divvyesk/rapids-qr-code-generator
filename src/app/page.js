@@ -3,10 +3,12 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { QRCodeCanvas, QRCodeSVG } from "qrcode.react";
 import { upload } from "@vercel/blob/client";
-import { COUNTRIES, DEFAULT_COUNTRY, getCountry, toInternational } from "./countries";
+import { COUNTRIES, DEFAULT_COUNTRY, getCountry, cleanPhone, toInternational } from "./countries";
+import { cleanText, cleanAddress, escapeText } from "./vcard";
 import AsciiField from "./components/AsciiField";
 import AsciiQrIdle from "./components/AsciiQrIdle";
 import AsciiWordmark from "./components/AsciiWordmark";
+import ImageBatchResults from "./components/ImageBatchResults";
 
 const PHONE_ICON_PROPS = {
   viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.75",
@@ -46,6 +48,9 @@ const getPhoneType = (value) => PHONE_TYPES.find((t) => t.value === value) || PH
 // Image mode: originals are uploaded untouched to Vercel Blob (see app/api/upload/route.js)
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // keep in sync with the upload route
+const MAX_BATCH = 30; // images per Generate
+const UPLOAD_CONCURRENCY = 3;
+let nextImageId = 0;
 
 const formatBytes = (bytes) =>
   bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -94,13 +99,12 @@ export default function Home() {
   // Multiple URLs State (Initial state with 1 empty field)
   const [urls, setUrls] = useState([""]);
 
-  // Image Tab State
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState("");
+  // Image Tab State: one entry per selected image { id, file, preview, url }; url is set once uploaded
+  const [images, setImages] = useState([]);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(null); // null when idle, 0–100 while uploading
-  const previewUrlRef = useRef("");
-  const uploadedImageRef = useRef({ file: null, url: "" }); // regenerating the same file reuses its upload
+  const [uploadProgress, setUploadProgress] = useState(null); // null when idle, else { done, total, percent }
+  const [imageResults, setImageResults] = useState([]); // batch output: { id, name, preview, qr }
+  const imagesRef = useRef([]); // latest images, for releasing previews on unmount
   const imageInputRef = useRef(null);
 
   // Generated Result State
@@ -209,60 +213,113 @@ export default function Home() {
   };
 
   // Image handlers
-  const showPreview = (file) => {
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    previewUrlRef.current = file ? URL.createObjectURL(file) : "";
-    setImagePreview(previewUrlRef.current);
+  const addImages = useCallback((fileList) => {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
+
+    const skipped = [];
+    const accepted = [];
+    for (const file of files) {
+      if (!IMAGE_TYPES.includes(file.type)) {
+        const isHeic = /heic|heif/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+        skipped.push(`${file.name} (${isHeic ? "HEIC: export as JPEG first" : "not a JPEG, PNG, WebP, GIF or AVIF"})`);
+      } else if (file.size > MAX_IMAGE_BYTES) {
+        skipped.push(`${file.name} (${formatBytes(file.size)}, over 20 MB)`);
+      } else if (images.length + accepted.length >= MAX_BATCH) {
+        skipped.push(`${file.name} (limit is ${MAX_BATCH} images at a time)`);
+      } else {
+        accepted.push({ id: nextImageId++, file, preview: URL.createObjectURL(file), url: "" });
+      }
+    }
+
+    setErrorMsg(skipped.length ? `Skipped ${skipped.join(", ")}.` : "");
+    if (accepted.length) setImages([...images, ...accepted]);
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  }, [images]);
+
+  const removeImage = (id) => {
+    const image = images.find((img) => img.id === id);
+    if (image) URL.revokeObjectURL(image.preview);
+    setImages(images.filter((img) => img.id !== id));
+    setImageResults((results) => results.filter((r) => r.id !== id));
   };
 
-  const selectImage = useCallback((file) => {
-    if (!file) return;
-    setErrorMsg("");
-    if (!IMAGE_TYPES.includes(file.type)) {
-      const isHeic = /heic|heif/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
-      setErrorMsg(isHeic
-        ? "HEIC photos don't open on most Android phones or browsers. Export it as JPEG first."
-        : "Use a JPEG, PNG, WebP, GIF or AVIF image.");
-      return;
-    }
-    if (file.size > MAX_IMAGE_BYTES) {
-      setErrorMsg(`That image is ${formatBytes(file.size)}. The limit is 20 MB.`);
-      return;
-    }
-    showPreview(file);
-    setImageFile(file);
-  }, []);
-
-  const clearImage = () => {
-    showPreview(null);
-    setImageFile(null);
-    if (imageInputRef.current) imageInputRef.current.value = "";
+  const clearImages = () => {
+    images.forEach((img) => URL.revokeObjectURL(img.preview));
+    setImages([]);
+    setImageResults([]);
   };
 
   const handleImageDrop = (e) => {
     e.preventDefault();
     setIsDraggingImage(false);
-    selectImage(e.dataTransfer.files?.[0]);
+    addImages(e.dataTransfer.files);
   };
 
-  // Paste an image from the clipboard while the Image tab is open
+  // Paste images from the clipboard while the Image tab is open
   useEffect(() => {
     if (activeTab !== "image") return;
     const onPaste = (e) => {
-      const file = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith("image/"));
-      if (file) {
+      const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+      if (files.length) {
         e.preventDefault();
-        selectImage(file);
+        addImages(files);
       }
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [activeTab, selectImage]);
+  }, [activeTab, addImages]);
 
-  // Release the preview's object URL on unmount
-  useEffect(() => () => {
-    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-  }, []);
+  // Release preview object URLs on unmount
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
+  useEffect(() => () => imagesRef.current.forEach((img) => URL.revokeObjectURL(img.preview)), []);
+
+  // Upload every image that isn't stored yet, a few at a time; returns id -> save-page URL
+  const uploadImages = async () => {
+    const urls = new Map(images.filter((img) => img.url).map((img) => [img.id, img.url]));
+    const queue = images.filter((img) => !img.url);
+    const failed = [];
+    if (!queue.length) return { urls, failed };
+
+    const totalBytes = queue.reduce((sum, img) => sum + img.file.size, 0);
+    const loaded = new Map();
+    let done = 0;
+    const report = () => {
+      const sent = [...loaded.values()].reduce((sum, n) => sum + n, 0);
+      setUploadProgress({ done, total: queue.length, percent: Math.round((sent / totalBytes) * 100) });
+    };
+    report();
+
+    const uploadOne = async (img) => {
+      try {
+        // Straight from the browser to Vercel Blob, byte-for-byte; the route only issues a token
+        const blob = await upload(`images/${img.file.name.replace(/[^a-z0-9._-]+/gi, "-")}`, img.file, {
+          access: "public",
+          handleUploadUrl: "/api/upload",
+          multipart: img.file.size > 8 * 1024 * 1024,
+          onUploadProgress: ({ loaded: bytes }) => { loaded.set(img.id, bytes); report(); },
+        });
+        // Point the QR at our save page (/i), which offers "Save to Photos" for the stored file
+        const store = new URL(blob.url).hostname.split(".")[0];
+        urls.set(img.id, `${window.location.origin}/i?s=${store}&p=${blob.pathname}`);
+      } catch (err) {
+        failed.push(`${img.file.name}${err?.message ? ` (${err.message})` : ""}`);
+      } finally {
+        loaded.set(img.id, img.file.size);
+        done++;
+        report();
+      }
+    };
+
+    let next = 0;
+    const worker = async () => {
+      while (next < queue.length) await uploadOne(queue[next++]);
+    };
+    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, queue.length) }, worker));
+    return { urls, failed };
+  };
 
   const switchTab = (tab) => {
     setActiveTab(tab);
@@ -276,13 +333,13 @@ export default function Home() {
     setQrValue("");
 
     if (activeTab === "url") {
-      if (!urlInput.trim()) {
+      if (!cleanAddress(urlInput)) {
         setErrorMsg("Enter or paste a URL first.");
         return;
       }
 
-      // Ensure URL has protocol
-      let finalUrl = urlInput.trim();
+      // Ensure URL has protocol (and drop any invisible characters picked up when pasting)
+      let finalUrl = cleanAddress(urlInput);
       if (!/^https?:\/\//i.test(finalUrl)) {
         finalUrl = "https://" + finalUrl;
       }
@@ -291,55 +348,53 @@ export default function Home() {
       setGeneratedType("url");
       setGenerationCount((n) => n + 1);
     } else if (activeTab === "image") {
-      if (!imageFile) {
-        setErrorMsg("Choose an image first.");
+      if (!images.length) {
+        setErrorMsg("Choose at least one image.");
         return;
       }
 
-      try {
-        let url = uploadedImageRef.current.file === imageFile ? uploadedImageRef.current.url : "";
-        if (!url) {
-          setUploadProgress(0);
-          // Straight from the browser to Vercel Blob, byte-for-byte; the route only issues a token
-          const blob = await upload(`images/${imageFile.name.replace(/[^a-z0-9._-]+/gi, "-")}`, imageFile, {
-            access: "public",
-            handleUploadUrl: "/api/upload",
-            multipart: imageFile.size > 8 * 1024 * 1024,
-            onUploadProgress: ({ percentage }) => setUploadProgress(Math.round(percentage)),
-          });
-          // Point the QR at our save page (/i), which offers "Save to Photos" for the stored file
-          const store = new URL(blob.url).hostname.split(".")[0];
-          url = `${window.location.origin}/i?s=${store}&p=${blob.pathname}`;
-          uploadedImageRef.current = { file: imageFile, url };
-        }
-        setQrValue(url);
-        setGeneratedType("image");
-        setGenerationCount((n) => n + 1);
-      } catch (err) {
-        setErrorMsg(`Upload failed${err?.message ? `: ${err.message}` : ". Check your connection and try again."}`);
-      } finally {
-        setUploadProgress(null);
+      setImageResults([]);
+      const { urls, failed } = await uploadImages();
+      setUploadProgress(null);
+      // Remember uploads so pressing Generate again only retries the failures
+      setImages(images.map((img) => (urls.has(img.id) ? { ...img, url: urls.get(img.id) } : img)));
+
+      if (failed.length) {
+        setErrorMsg(`${failed.length} of ${images.length} upload${images.length > 1 ? "s" : ""} failed: ${failed.join(", ")}. Press Generate again to retry.`);
       }
+      const results = images
+        .filter((img) => urls.has(img.id))
+        .map((img) => ({ id: img.id, name: img.file.name, preview: img.preview, qr: urls.get(img.id) }));
+      if (!results.length) return;
+
+      setQrValue(results[0].qr);
+      setImageResults(results);
+      setGeneratedType(images.length > 1 ? "image-batch" : "image");
+      setGenerationCount((n) => n + 1);
     } else {
       // Validate compulsory fields
-      if (!contactForm.firstName.trim()) {
+      if (!cleanText(contactForm.firstName)) {
         setErrorMsg("First name is required.");
         return;
       }
 
-      // Filter empty entries
-      const activePhones = phones.filter(p => p.number.trim() !== "");
-      const activeUrls = urls.filter(u => u.trim() !== "");
+      // Escaped, invisible-character-free copies of every text field (see vcard.js)
+      const c = Object.fromEntries(Object.entries(contactForm).map(([key, value]) => [key, escapeText(value)]));
+      const email = cleanAddress(contactForm.email);
+
+      // Filter empty entries (a number counts only if it has digits once cleaned)
+      const activePhones = phones.filter(p => /\d/.test(cleanPhone(p.number)));
+      const activeUrls = urls.map(cleanAddress).filter(Boolean);
 
       // Static Offline vCard format (Directly stored in QR code)
       const vcard = [
         "BEGIN:VCARD",
         "VERSION:3.0",
-        `N:${contactForm.lastName};${contactForm.firstName};;;`,
-        `FN:${contactForm.firstName} ${contactForm.lastName}`.trim(),
-        contactForm.organization ? `ORG:${contactForm.organization}` : "",
-        contactForm.jobTitle ? `TITLE:${contactForm.jobTitle}` : "",
-        contactForm.email ? `EMAIL;TYPE=INTERNET,PREF:${contactForm.email}` : "",
+        `N:${c.lastName};${c.firstName};;;`,
+        `FN:${c.firstName} ${c.lastName}`.trim(),
+        c.organization ? `ORG:${c.organization}` : "",
+        c.jobTitle ? `TITLE:${c.jobTitle}` : "",
+        email ? `EMAIL;TYPE=INTERNET,PREF:${email}` : "",
         ...activePhones.flatMap((phone, i) => {
           const phoneType = getPhoneType(phone.type);
           // Group the number with its label ("item1.TEL" + "item1.X-ABLabel") so iOS pairs them
@@ -349,10 +404,10 @@ export default function Home() {
             `${group}.X-ABLabel:${phoneType.label}`
           ];
         }),
-        (contactForm.street || contactForm.city || contactForm.region || contactForm.postcode || contactForm.country)
-          ? `ADR;TYPE=WORK,POSTAL:;;${contactForm.street || ""};${contactForm.city || ""};${contactForm.region || ""};${contactForm.postcode || ""};${contactForm.country || ""}`
+        (c.street || c.city || c.region || c.postcode || c.country)
+          ? `ADR;TYPE=WORK,POSTAL:;;${c.street};${c.city};${c.region};${c.postcode};${c.country}`
           : "",
-        ...activeUrls.map(url => `URL:${url.trim()}`),
+        ...activeUrls.map(url => `URL:${url}`),
         "END:VCARD"
       ].filter(Boolean).join("\r\n");
 
@@ -445,7 +500,7 @@ export default function Home() {
           <section className="panel panel-input">
             <div className="panel-bar">
               <span>┌─ input</span>
-              <span>{{ url: "mode: link", contact: "mode: vcard 3.0", image: "mode: image" }[activeTab]}</span>
+              <span>{{ url: "mode: link", contact: "mode: vcard 3.0", image: images.length > 1 ? `mode: image ×${images.length}` : "mode: image" }[activeTab]}</span>
             </div>
 
             <div className="tabs" role="tablist">
@@ -683,7 +738,7 @@ export default function Home() {
               {activeTab === "image" && (
                 /* IMAGE UPLOAD TAB */
                 <div className="form-section">
-                  <SectionHead index="01" title="Image" />
+                  <SectionHead index="01" title={images.length > 1 ? `Images · ${images.length}` : "Image"} />
                   <div
                     className="field"
                     onDragOver={(e) => { e.preventDefault(); setIsDraggingImage(true); }}
@@ -694,23 +749,49 @@ export default function Home() {
                       ref={imageInputRef}
                       type="file"
                       accept={IMAGE_TYPES.join(",")}
+                      multiple
                       className="visually-hidden"
                       tabIndex={-1}
-                      onChange={(e) => selectImage(e.target.files?.[0])}
+                      onChange={(e) => addImages(e.target.files)}
                     />
-                    {imageFile ? (
-                      <div className={`image-preview ${isDraggingImage ? "dragging" : ""}`}>
-                        {/* eslint-disable-next-line @next/next/no-img-element -- local blob: preview, nothing for next/image to optimize */}
-                        <img src={imagePreview} alt="Selected image" />
-                        <div className="image-info">
-                          <span className="image-name">{imageFile.name}</span>
-                          <span className="image-size">{formatBytes(imageFile.size)} · uploaded at full quality</span>
-                          <div className="image-actions">
-                            <button type="button" className="btn-ghost" onClick={() => imageInputRef.current?.click()}>Replace</button>
-                            <button type="button" className="btn-ghost" onClick={clearImage}>Remove</button>
-                          </div>
+                    {images.length ? (
+                      <>
+                        <ul className={`image-grid ${isDraggingImage ? "dragging" : ""}`}>
+                          {images.map((img) => (
+                            <li key={img.id} className={`image-tile ${uploadProgress && !img.url ? "uploading" : ""}`}>
+                              {/* eslint-disable-next-line @next/next/no-img-element -- local blob: preview, nothing for next/image to optimize */}
+                              <img src={img.preview} alt="" />
+                              <span className="image-tile-name" title={img.file.name}>{img.file.name}</span>
+                              <span className="image-tile-size">{img.url ? "✓ uploaded" : formatBytes(img.file.size)}</span>
+                              <button
+                                type="button"
+                                className="image-tile-remove"
+                                onClick={() => removeImage(img.id)}
+                                disabled={uploadProgress !== null}
+                                aria-label={`Remove ${img.file.name}`}
+                              >
+                                ×
+                              </button>
+                            </li>
+                          ))}
+                          {images.length < MAX_BATCH && (
+                            <li>
+                              <button
+                                type="button"
+                                className="image-tile-add"
+                                onClick={() => imageInputRef.current?.click()}
+                                disabled={uploadProgress !== null}
+                              >
+                                <span aria-hidden="true">+</span>
+                                add more
+                              </button>
+                            </li>
+                          )}
+                        </ul>
+                        <div className="image-actions">
+                          <button type="button" className="btn-ghost" onClick={clearImages} disabled={uploadProgress !== null}>Clear all</button>
                         </div>
-                      </div>
+                      </>
                     ) : (
                       <button
                         type="button"
@@ -718,11 +799,13 @@ export default function Home() {
                         onClick={() => imageInputRef.current?.click()}
                       >
                         <span className="dropzone-icon" aria-hidden="true">[ + ]</span>
-                        <span className="dropzone-title">Upload image</span>
-                        <span className="dropzone-sub">click, drop or paste · jpg png webp gif avif · max 20 mb</span>
+                        <span className="dropzone-title">Upload images</span>
+                        <span className="dropzone-sub">click, drop or paste · one or many · max 20 mb each</span>
                       </button>
                     )}
-                    <p className="hint">Your image is stored as-is, at full quality, so the code can link to it. Anyone with the code or its link can view it.</p>
+                    <p className="hint">
+                      Each image gets its own QR code (up to {MAX_BATCH} at a time). Images are stored as-is, at full quality, so the codes can link to them. Anyone with a code or its link can view that image.
+                    </p>
                   </div>
                 </div>
               )}
@@ -735,8 +818,12 @@ export default function Home() {
               )}
 
               <button type="submit" className="btn-generate" disabled={uploadProgress !== null}>
-                <span className="btn-generate-label">{uploadProgress !== null ? "Uploading" : "Generate"}</span>
-                <span className="btn-generate-kbd">{uploadProgress !== null ? `[ ${uploadProgress}% ]` : "[ enter ↵ ]"}</span>
+                <span className="btn-generate-label">{uploadProgress ? "Uploading" : "Generate"}</span>
+                <span className="btn-generate-kbd">
+                  {uploadProgress
+                    ? `[ ${uploadProgress.total > 1 ? `${uploadProgress.done}/${uploadProgress.total} · ` : ""}${uploadProgress.percent}% ]`
+                    : "[ enter ↵ ]"}
+                </span>
               </button>
             </form>
           </section>
@@ -750,6 +837,14 @@ export default function Home() {
 
             <div className="panel-body output-body">
               {qrValue ? (
+                generatedType === "image-batch" ? (
+                  <div className="result" key={generationCount}>
+                    <h2 className="result-title">Your codes</h2>
+                    <p className="result-meta">{imageResults.length} images · one code each · ecc m</p>
+                    <ImageBatchResults results={imageResults} />
+                    <p className="hint scan-hint">Each code opens its image with a Save to Photos button.</p>
+                  </div>
+                ) : (
                 <div className="result" key={generationCount}>
                   <h2 className="result-title">{{ url: "Your link", contact: "Your card", image: "Your image" }[generatedType]}</h2>
                   <p className="result-meta">
@@ -798,6 +893,7 @@ export default function Home() {
                     </button>
                   </div>
                 </div>
+                )
               ) : (
                 <div className="idle">
                   <AsciiQrIdle />

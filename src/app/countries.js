@@ -1,3 +1,5 @@
+import { cleanText } from "./vcard";
+
 // Country calling codes (ITU-T E.164). NANP members (US, Canada, Caribbean) share +1 and
 // take the area code as part of the number.
 const COUNTRY_DATA = `AF|Afghanistan|93
@@ -215,10 +217,17 @@ const KEEPS_LEADING_ZERO = new Set(["IT", "SM", "VA"]);
 
 export const getCountry = (iso) => COUNTRIES.find((c) => c.iso === iso) || COUNTRIES.find((c) => c.iso === DEFAULT_COUNTRY);
 
+// Keep only characters that belong in a phone number. Pasted numbers often carry invisible
+// direction marks or odd spaces; "00" is the international dialling prefix, same as "+".
+export const cleanPhone = (number) => {
+  const cleaned = cleanText(number).replace(/[^\d+()\-. ]/g, "").replace(/ {2,}/g, " ").trim();
+  return cleaned.startsWith("00") ? `+${cleaned.slice(2)}` : cleaned;
+};
+
 // Prefix a national number with its country code, e.g. ("IN", "022 2345 6789") -> "+91 22 2345 6789".
-// Numbers the user already typed in international form (starting with "+") are left as-is.
+// Numbers already in international form ("+91 …", "0091 …") are kept as-is, so +91 never doubles.
 export const toInternational = (iso, number) => {
-  const trimmed = number.trim();
+  const trimmed = cleanPhone(number);
   if (trimmed.startsWith("+")) return trimmed;
   const country = getCountry(iso);
   const national = KEEPS_LEADING_ZERO.has(country.iso) ? trimmed : trimmed.replace(/^0/, "");

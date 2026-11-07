@@ -612,50 +612,6 @@ button {
   color: var(--fg-3);
 }
 
-.image-preview {
-  display: flex;
-  gap: 18px;
-  align-items: center;
-  padding: 14px;
-  border: 1px solid var(--line);
-  background: var(--wash);
-  transition: border-color var(--fast);
-}
-
-.image-preview.dragging {
-  border-color: var(--fg);
-}
-
-.image-preview img {
-  flex-shrink: 0;
-  width: 128px;
-  height: 128px;
-  object-fit: contain;
-  background: repeating-conic-gradient(rgba(255, 255, 255, 0.08) 0 25%, transparent 0 50%) 0 0 / 16px 16px;
-  border: 1px solid var(--line);
-}
-
-.image-info {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-.image-name {
-  font-size: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.image-size {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--fg-3);
-}
-
 .image-actions {
   display: flex;
   gap: 8px;
@@ -664,6 +620,210 @@ button {
 
 .image-actions .btn-ghost {
   padding: 8px 14px;
+}
+
+/* Selected images (batch) */
+.image-grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: var(--wash);
+  transition: border-color var(--fast);
+}
+
+.image-grid.dragging {
+  border-color: var(--fg);
+}
+
+.image-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  animation: row-in 0.25s var(--ease);
+}
+
+.image-tile img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  background: repeating-conic-gradient(rgba(255, 255, 255, 0.08) 0 25%, transparent 0 50%) 0 0 / 16px 16px;
+}
+
+.image-tile.uploading img {
+  opacity: 0.4;
+}
+
+.image-tile-name {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-tile-size {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.image-tile-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid var(--line-strong);
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--fast), color var(--fast);
+}
+
+.image-tile-remove:hover:not(:disabled) {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.image-tile-add {
+  width: 100%;
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  color: var(--fg-2);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color var(--fast), color var(--fast);
+}
+
+.image-tile-add span {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.image-tile-add:hover:not(:disabled) {
+  border-style: solid;
+  border-color: var(--fg);
+  color: var(--fg);
+}
+
+.image-tile-remove:disabled,
+.image-tile-add:disabled,
+.btn-ghost:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Batch results */
+.batch {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.batch-list {
+  list-style: none;
+  max-height: 480px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  text-align: left;
+}
+
+.batch-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+}
+
+.batch-item + .batch-item {
+  border-top: 1px solid var(--line);
+}
+
+.batch-qr {
+  flex-shrink: 0;
+  width: 96px;
+  height: 96px;
+  background: #fff;
+  line-height: 0;
+}
+
+.batch-qr svg {
+  width: 100%;
+  height: 100%;
+}
+
+.batch-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.batch-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.batch-thumb {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+}
+
+.batch-name {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.btn-mini {
+  padding: 5px 9px;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--fg);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--fast), color var(--fast), border-color var(--fast);
+}
+
+.btn-mini:hover {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg);
 }
 
 /* ---------- Error ---------- */
@@ -1096,16 +1256,6 @@ button {
     font-size: 8.5px;
     letter-spacing: 0.06em;
     white-space: nowrap;
-  }
-
-  .image-preview {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .image-preview img {
-    width: 100%;
-    height: 200px;
   }
 
   .panel-body {
