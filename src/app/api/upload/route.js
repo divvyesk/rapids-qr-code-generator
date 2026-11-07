@@ -1,4 +1,5 @@
 import { handleUpload } from "@vercel/blob/client";
+import { isSignedIn } from "@/lib/session";
 
 // Issues short-lived tokens so the browser can upload an image straight to Vercel Blob
 // (the file itself never passes through this function). Images are stored untouched.
@@ -8,6 +9,11 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // keep in sync with MAX_IMAGE_BYTES 
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
 
 export async function POST(request) {
+  // The proxy already blocks signed-out requests; checked here too so the route never relies on it alone
+  if (!(await isSignedIn(request))) {
+    return Response.json({ error: "Not signed in." }, { status: 401 });
+  }
+
   const body = await request.json();
 
   try {

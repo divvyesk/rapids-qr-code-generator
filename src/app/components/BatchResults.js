@@ -45,8 +45,11 @@ const saveBlob = (blob, name) => {
 const fileBase = (name, index) =>
   `${String(index + 1).padStart(2, "0")}-${name.replace(/\.[^.]+$/, "").replace(/[^a-z0-9._-]+/gi, "-").slice(0, 60)}-qr`;
 
-/** One QR per uploaded image, with per-code and download-all (ZIP) exports. */
-export default function ImageBatchResults({ results }) {
+/**
+ * A list of generated QR codes (one per image or per contact) with per-code and download-all (ZIP) exports.
+ * results: [{ id, name, qr, preview?, subtitle? }]
+ */
+export default function BatchResults({ results, zipPrefix = "rapids-qr-codes" }) {
   const svgHosts = useRef({}); // result id -> element wrapping its rendered QR <svg>
 
   const svgFor = (id) => serializeSvg(svgHosts.current[id].querySelector("svg"));
@@ -66,7 +69,7 @@ export default function ImageBatchResults({ results }) {
           ? new TextEncoder().encode(svg)
           : [new Uint8Array(await (await svgToPng(svg)).arrayBuffer()), { level: 0 }]; // PNGs are already compressed
     }
-    saveBlob(new Blob([zipSync(files)], { type: "application/zip" }), `rapids-qr-codes-${results.length}-${format}.zip`);
+    saveBlob(new Blob([zipSync(files)], { type: "application/zip" }), `${zipPrefix}-${results.length}-${format}.zip`);
   };
 
   return (
@@ -88,14 +91,21 @@ export default function ImageBatchResults({ results }) {
             </div>
             <div className="batch-info">
               <div className="batch-file">
-                {/* eslint-disable-next-line @next/next/no-img-element -- local blob: preview */}
-                <img src={result.preview} alt="" className="batch-thumb" />
-                <span className="batch-name">{result.name}</span>
+                {result.preview && (
+                  // eslint-disable-next-line @next/next/no-img-element -- local blob: preview
+                  <img src={result.preview} alt="" className="batch-thumb" />
+                )}
+                <div className="batch-text">
+                  <span className="batch-name">{result.name}</span>
+                  {result.subtitle && <span className="batch-subtitle">{result.subtitle}</span>}
+                </div>
               </div>
               <div className="batch-buttons">
                 <button type="button" className="btn-mini" onClick={() => downloadOne(result, index, "svg")}>↓ svg</button>
                 <button type="button" className="btn-mini" onClick={() => downloadOne(result, index, "png")}>↓ png</button>
-                <a className="btn-mini" href={result.qr} target="_blank" rel="noreferrer">open ↗</a>
+                {/^https?:/.test(result.qr) && (
+                  <a className="btn-mini" href={result.qr} target="_blank" rel="noreferrer">open ↗</a>
+                )}
               </div>
             </div>
           </li>

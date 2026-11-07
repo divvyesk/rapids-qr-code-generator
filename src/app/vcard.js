@@ -24,3 +24,43 @@ export const escapeText = (value) =>
 
 /** Clean a URL or email: no spaces allowed inside. */
 export const cleanAddress = (value) => cleanText(value).replace(/ /g, "");
+
+// vCard TEL type + the label iOS shows (via X-ABLabel) for each phone type
+export const PHONE_VCARD = {
+  mobile: { vcardType: "CELL", label: "Mobile" },
+  phone: { vcardType: "VOICE", label: "Phone" },
+  fax: { vcardType: "FAX", label: "Fax" },
+};
+
+// Phones only make a link tappable when it has a scheme ("rapids.app" -> "https://rapids.app")
+const withScheme = (url) => (/^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`);
+
+/**
+ * Build a vCard 3.0 string from a contact. Text is cleaned and escaped here;
+ * phone numbers must already be in final (international) form.
+ */
+export function buildVcard(contact) {
+  const field = (key) => escapeText(contact[key]);
+  const [first, last, org, title] = [field("firstName"), field("lastName"), field("organization"), field("jobTitle")];
+  const email = cleanAddress(contact.email);
+  const address = [field("street"), field("city"), field("region"), field("postcode"), field("country")];
+
+  return [
+    "BEGIN:VCARD",
+    "VERSION:3.0",
+    `N:${last};${first};;;`,
+    `FN:${`${first} ${last}`.trim() || org}`,
+    org ? `ORG:${org}` : "",
+    title ? `TITLE:${title}` : "",
+    email ? `EMAIL;TYPE=INTERNET,PREF:${email}` : "",
+    ...(contact.phones || []).flatMap((phone, i) => {
+      const { vcardType, label } = PHONE_VCARD[phone.type] || PHONE_VCARD.phone;
+      // Group the number with its label ("item1.TEL" + "item1.X-ABLabel") so iOS pairs them
+      const group = `item${i + 1}`;
+      return [`${group}.TEL;TYPE=${vcardType}${i === 0 ? ",PREF" : ""}:${phone.number}`, `${group}.X-ABLabel:${label}`];
+    }),
+    address.some(Boolean) ? `ADR;TYPE=WORK,POSTAL:;;${address.join(";")}` : "",
+    ...(contact.urls || []).map(cleanAddress).filter(Boolean).map((url) => `URL:${withScheme(url)}`),
+    "END:VCARD",
+  ].filter(Boolean).join("\r\n");
+}

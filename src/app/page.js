@@ -4,31 +4,30 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { QRCodeCanvas, QRCodeSVG } from "qrcode.react";
 import { upload } from "@vercel/blob/client";
 import { COUNTRIES, DEFAULT_COUNTRY, getCountry, cleanPhone, toInternational } from "./countries";
-import { cleanText, cleanAddress, escapeText } from "./vcard";
+import { cleanText, cleanAddress, buildVcard } from "./vcard";
+import { parseSheet, guessContact, MAX_SHEET_ROWS } from "./contactSheet";
 import AsciiField from "./components/AsciiField";
 import AsciiQrIdle from "./components/AsciiQrIdle";
 import AsciiWordmark from "./components/AsciiWordmark";
-import ImageBatchResults from "./components/ImageBatchResults";
+import BatchResults from "./components/BatchResults";
 
 const PHONE_ICON_PROPS = {
   viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.75",
   strokeLinecap: "round", strokeLinejoin: "round", width: "15", height: "15"
 };
 
-// Phone number types, mapped to vCard TEL TYPE values. Each number also carries an Apple custom
-// label (X-ABLabel) so iOS shows exactly `label` — its built-in names are lowercase ("mobile")
-// or the raw type ("VOICE"). Android ignores the label and reads the standard TYPE.
+// Phone number types for the form; their vCard TYPE and iOS label live in vcard.js (PHONE_VCARD)
 const PHONE_TYPES = [
   {
-    value: "mobile", label: "Mobile", vcardType: "CELL", placeholder: "98765 43210",
+    value: "mobile", label: "Mobile", placeholder: "98765 43210",
     icon: <svg {...PHONE_ICON_PROPS}><rect x="5" y="2" width="14" height="20" rx="2" ry="2" /><line x1="12" y1="18" x2="12.01" y2="18" /></svg>
   },
   {
-    value: "phone", label: "Phone", vcardType: "VOICE", placeholder: "22 2345 6789",
+    value: "phone", label: "Phone", placeholder: "22 2345 6789",
     icon: <svg {...PHONE_ICON_PROPS}><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" /></svg>
   },
   {
-    value: "fax", label: "Fax", vcardType: "FAX", placeholder: "22 2345 6790",
+    value: "fax", label: "Fax", placeholder: "22 2345 6790",
     icon: (
       <svg {...PHONE_ICON_PROPS}>
         <polyline points="6 9 6 2 18 2 18 9" />
@@ -49,6 +48,7 @@ const getPhoneType = (value) => PHONE_TYPES.find((t) => t.value === value) || PH
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"];
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // keep in sync with the upload route
 const MAX_BATCH = 30; // images per Generate
+const SHEET_ROWS_PER_REQUEST = 15; // rows sent to the AI per request (the route allows up to 20)
 const UPLOAD_CONCURRENCY = 3;
 let nextImageId = 0;
 
@@ -103,7 +103,16 @@ export default function Home() {
   const [images, setImages] = useState([]);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null); // null when idle, else { done, total, percent }
-  const [imageResults, setImageResults] = useState([]); // batch output: { id, name, preview, qr }
+  const [batchResults, setBatchResults] = useState([]); // batch output (images or contacts): { id, name, qr, preview?, subtitle? }
+
+  // Contact batch (spreadsheet) state
+  const [contactMode, setContactMode] = useState("single"); // 'single' or 'sheet'
+  const [sheet, setSheet] = useState(null); // { name, headers, rows: [{ row, cells }] }
+  const [sheetCountry, setSheetCountry] = useState(DEFAULT_COUNTRY);
+  const [sheetProgress, setSheetProgress] = useState(null); // null when idle, else { done, total }
+  const [isDraggingSheet, setIsDraggingSheet] = useState(false);
+  const [batchModels, setBatchModels] = useState([]); // which AI models read the last sheet
+  const sheetInputRef = useRef(null);
   const imagesRef = useRef([]); // latest images, for releasing previews on unmount
   const imageInputRef = useRef(null);
 
@@ -241,13 +250,13 @@ export default function Home() {
     const image = images.find((img) => img.id === id);
     if (image) URL.revokeObjectURL(image.preview);
     setImages(images.filter((img) => img.id !== id));
-    setImageResults((results) => results.filter((r) => r.id !== id));
+    setBatchResults((results) => results.filter((r) => r.id !== id));
   };
 
   const clearImages = () => {
     images.forEach((img) => URL.revokeObjectURL(img.preview));
     setImages([]);
-    setImageResults([]);
+    setBatchResults([]);
   };
 
   const handleImageDrop = (e) => {
@@ -321,6 +330,84 @@ export default function Home() {
     return { urls, failed };
   };
 
+  // Sheet handlers
+  const selectSheet = async (file) => {
+    if (!file) return;
+    setErrorMsg("");
+    if (sheetInputRef.current) sheetInputRef.current.value = "";
+    try {
+      const { headers, rows } = await parseSheet(file);
+      if (!rows.length) throw new Error("That sheet has no rows under the column names.");
+      if (rows.length > MAX_SHEET_ROWS) {
+        throw new Error(`That sheet has ${rows.length} rows. Up to ${MAX_SHEET_ROWS} at a time: split it into smaller sheets.`);
+      }
+      setSheet({ name: file.name, headers, rows });
+    } catch (err) {
+      setErrorMsg(err.message || "That file couldn't be read.");
+    }
+  };
+
+  const handleSheetDrop = (e) => {
+    e.preventDefault();
+    setIsDraggingSheet(false);
+    selectSheet(e.dataTransfer.files?.[0]);
+  };
+
+  // Read every row with the AI (a couple of requests at a time); rows the AI can't handle fall back
+  // to matching column names. Returns contacts sorted by row, plus the models that answered.
+  const extractContacts = async (rows) => {
+    const chunks = [];
+    for (let i = 0; i < rows.length; i += SHEET_ROWS_PER_REQUEST) chunks.push(rows.slice(i, i + SHEET_ROWS_PER_REQUEST));
+
+    const contacts = [];
+    const models = new Set();
+    let guessedRows = 0;
+    let done = 0;
+    setSheetProgress({ done, total: rows.length });
+
+    const readChunk = async (chunk) => {
+      let fromAi = [];
+      try {
+        const res = await fetch("/api/extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: chunk }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401) throw Object.assign(new Error("Your session expired. Sign in again."), { fatal: true });
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        fromAi = data.contacts;
+        models.add(data.model);
+      } catch (err) {
+        if (err.fatal) throw err;
+        console.warn("[sheet] AI unavailable for rows", chunk.map((r) => r.row), err.message);
+      }
+      const byRow = new Map(fromAi.map((c) => [c.row, c]));
+      for (const { row, cells } of chunk) {
+        if (!byRow.has(row)) guessedRows++;
+        contacts.push({ ...(byRow.get(row) || guessContact(cells)), row });
+      }
+      done += chunk.length;
+      setSheetProgress({ done, total: rows.length });
+    };
+
+    let next = 0;
+    const worker = async () => {
+      while (next < chunks.length) await readChunk(chunks[next++]);
+    };
+    try {
+      await Promise.all([worker(), worker()]);
+    } finally {
+      setSheetProgress(null);
+    }
+    return { contacts: contacts.sort((a, b) => a.row - b.row), models: [...models], guessedRows };
+  };
+
+  const signOut = async () => {
+    await fetch("/api/login", { method: "DELETE" }).catch(() => {});
+    window.location.replace("/login");
+  };
+
   const switchTab = (tab) => {
     setActiveTab(tab);
     setErrorMsg("");
@@ -353,7 +440,7 @@ export default function Home() {
         return;
       }
 
-      setImageResults([]);
+      setBatchResults([]);
       const { urls, failed } = await uploadImages();
       setUploadProgress(null);
       // Remember uploads so pressing Generate again only retries the failures
@@ -368,8 +455,53 @@ export default function Home() {
       if (!results.length) return;
 
       setQrValue(results[0].qr);
-      setImageResults(results);
+      setBatchResults(results);
       setGeneratedType(images.length > 1 ? "image-batch" : "image");
+      setGenerationCount((n) => n + 1);
+    } else if (contactMode === "sheet") {
+      if (!sheet) {
+        setErrorMsg("Upload a spreadsheet first.");
+        return;
+      }
+
+      setBatchResults([]);
+      let extracted;
+      try {
+        extracted = await extractContacts(sheet.rows);
+      } catch (err) {
+        setErrorMsg(err.message);
+        return;
+      }
+      const { contacts, models, guessedRows } = extracted;
+
+      const skipped = [];
+      const results = [];
+      for (const contact of contacts) {
+        const phonesOut = contact.phones.map((p) => ({ type: p.type, number: toInternational(sheetCountry, p.number) }));
+        const name = cleanText(`${contact.firstName} ${contact.lastName}`) || cleanText(contact.organization);
+        // A card needs a name and something to reach the person by
+        if (!name || !(phonesOut.length || cleanAddress(contact.email))) {
+          skipped.push(contact.row);
+          continue;
+        }
+        results.push({
+          id: `row-${contact.row}`,
+          name,
+          subtitle: [contact.jobTitle, contact.organization !== name && contact.organization].filter(Boolean).join(" · ") || phonesOut[0]?.number || contact.email,
+          qr: buildVcard({ ...contact, phones: phonesOut }),
+        });
+      }
+
+      const notes = [];
+      if (guessedRows) notes.push(`The AI was unavailable for ${guessedRows} row${guessedRows > 1 ? "s" : ""}, so they were read by column name: double-check those cards.`);
+      if (skipped.length) notes.push(`Skipped row${skipped.length > 1 ? "s" : ""} ${skipped.join(", ")} (no name, or no phone/email).`);
+      setErrorMsg(notes.join(" "));
+      if (!results.length) return;
+
+      setBatchModels(models);
+      setBatchResults(results);
+      setQrValue(results[0].qr);
+      setGeneratedType("contact-batch");
       setGenerationCount((n) => n + 1);
     } else {
       // Validate compulsory fields
@@ -378,38 +510,15 @@ export default function Home() {
         return;
       }
 
-      // Escaped, invisible-character-free copies of every text field (see vcard.js)
-      const c = Object.fromEntries(Object.entries(contactForm).map(([key, value]) => [key, escapeText(value)]));
-      const email = cleanAddress(contactForm.email);
+      // A number counts only if it has digits once cleaned
+      const activePhones = phones.filter((p) => /\d/.test(cleanPhone(p.number)));
 
-      // Filter empty entries (a number counts only if it has digits once cleaned)
-      const activePhones = phones.filter(p => /\d/.test(cleanPhone(p.number)));
-      const activeUrls = urls.map(cleanAddress).filter(Boolean);
-
-      // Static Offline vCard format (Directly stored in QR code)
-      const vcard = [
-        "BEGIN:VCARD",
-        "VERSION:3.0",
-        `N:${c.lastName};${c.firstName};;;`,
-        `FN:${c.firstName} ${c.lastName}`.trim(),
-        c.organization ? `ORG:${c.organization}` : "",
-        c.jobTitle ? `TITLE:${c.jobTitle}` : "",
-        email ? `EMAIL;TYPE=INTERNET,PREF:${email}` : "",
-        ...activePhones.flatMap((phone, i) => {
-          const phoneType = getPhoneType(phone.type);
-          // Group the number with its label ("item1.TEL" + "item1.X-ABLabel") so iOS pairs them
-          const group = `item${i + 1}`;
-          return [
-            `${group}.TEL;TYPE=${phoneType.vcardType}${i === 0 ? ",PREF" : ""}:${toInternational(phone.countryCode, phone.number)}`,
-            `${group}.X-ABLabel:${phoneType.label}`
-          ];
-        }),
-        (c.street || c.city || c.region || c.postcode || c.country)
-          ? `ADR;TYPE=WORK,POSTAL:;;${c.street};${c.city};${c.region};${c.postcode};${c.country}`
-          : "",
-        ...activeUrls.map(url => `URL:${url}`),
-        "END:VCARD"
-      ].filter(Boolean).join("\r\n");
+      // Static offline vCard, stored directly in the QR code
+      const vcard = buildVcard({
+        ...contactForm,
+        phones: activePhones.map((p) => ({ type: p.type, number: toInternational(p.countryCode, p.number) })),
+        urls,
+      });
 
       setQrValue(vcard);
       setGeneratedType("contact");
@@ -483,6 +592,8 @@ export default function Home() {
             <span>static</span>
             <span className="topbar-dot hide-sm" aria-hidden="true">·</span>
             <span className="hide-sm">no tracking</span>
+            <span className="topbar-dot" aria-hidden="true">·</span>
+            <button type="button" className="topbar-signout" onClick={signOut}>sign out</button>
           </span>
         </header>
 
@@ -500,7 +611,7 @@ export default function Home() {
           <section className="panel panel-input">
             <div className="panel-bar">
               <span>┌─ input</span>
-              <span>{{ url: "mode: link", contact: "mode: vcard 3.0", image: images.length > 1 ? `mode: image ×${images.length}` : "mode: image" }[activeTab]}</span>
+              <span>{{ url: "mode: link", contact: contactMode === "sheet" ? "mode: vcard batch" : "mode: vcard 3.0", image: images.length > 1 ? `mode: image ×${images.length}` : "mode: image" }[activeTab]}</span>
             </div>
 
             <div className="tabs" role="tablist">
@@ -568,6 +679,121 @@ export default function Home() {
               {activeTab === "contact" && (
                 /* CONTACT INFO FORM TAB */
                 <>
+                  <div className="mode-switch" role="radiogroup" aria-label="Contact mode">
+                    {[["single", "Single card"], ["sheet", "Batch from sheet"]].map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={contactMode === mode}
+                        className={contactMode === mode ? "active" : ""}
+                        onClick={() => { setContactMode(mode); setErrorMsg(""); }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {contactMode === "sheet" ? (
+                    /* CONTACT BATCH (SPREADSHEET) */
+                    <>
+                      <div className="form-section">
+                        <SectionHead index="01" title="Sheet" />
+                        <div
+                          className="field"
+                          onDragOver={(e) => { e.preventDefault(); setIsDraggingSheet(true); }}
+                          onDragLeave={() => setIsDraggingSheet(false)}
+                          onDrop={handleSheetDrop}
+                        >
+                          <input
+                            ref={sheetInputRef}
+                            type="file"
+                            accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                            className="visually-hidden"
+                            tabIndex={-1}
+                            onChange={(e) => selectSheet(e.target.files?.[0])}
+                          />
+                          {sheet ? (
+                            <div className={`sheet-card ${isDraggingSheet ? "dragging" : ""}`}>
+                              <div className="sheet-summary">
+                                <div className="sheet-meta">
+                                  <span className="sheet-name">{sheet.name}</span>
+                                  <span className="sheet-count">{sheet.rows.length} rows · {sheet.headers.length} columns</span>
+                                </div>
+                                <div className="image-actions">
+                                  <button type="button" className="btn-ghost" onClick={() => sheetInputRef.current?.click()} disabled={sheetProgress !== null}>Replace</button>
+                                  <button type="button" className="btn-ghost" onClick={() => setSheet(null)} disabled={sheetProgress !== null}>Remove</button>
+                                </div>
+                              </div>
+                              <div className="sheet-preview">
+                                <table>
+                                  <thead>
+                                    <tr>
+                                      <th>row</th>
+                                      {sheet.headers.map((h) => <th key={h}>{h}</th>)}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {sheet.rows.slice(0, 5).map((r) => (
+                                      <tr key={r.row}>
+                                        <td>{r.row}</td>
+                                        {sheet.headers.map((h) => <td key={h}>{r.cells[h] || ""}</td>)}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {sheet.rows.length > 5 && <p className="hint">Showing the first 5 of {sheet.rows.length} rows.</p>}
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className={`dropzone ${isDraggingSheet ? "dragging" : ""}`}
+                              onClick={() => sheetInputRef.current?.click()}
+                            >
+                              <span className="dropzone-icon" aria-hidden="true">[ ▦ ]</span>
+                              <span className="dropzone-title">Upload sheet</span>
+                              <span className="dropzone-sub">.xlsx or .csv · first row = column names · up to {MAX_SHEET_ROWS} rows</span>
+                            </button>
+                          )}
+                          <p className="hint">
+                            Column names can be anything (&ldquo;Full Name&rdquo;, &ldquo;Cell&rdquo;, &ldquo;Firm&rdquo;…). An AI reads each row and fills in the card; each row becomes its own QR code.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="form-section">
+                        <SectionHead index="02" title="Numbers" />
+                        <div className="field">
+                          <label className="field-label">Country code for numbers without one</label>
+                          <div className="sheet-country">
+                            <div className="phone-field">
+                              <div className="segment country-code">
+                                <span className="country-flag">{getCountry(sheetCountry).flag}</span>
+                                <span>+{getCountry(sheetCountry).dial}</span>
+                                <Chevron />
+                                <select
+                                  value={sheetCountry}
+                                  onChange={(e) => setSheetCountry(e.target.value)}
+                                  className="segment-select"
+                                  aria-label="Default country code"
+                                >
+                                  {COUNTRIES.map((c) => (
+                                    <option key={c.iso} value={c.iso}>{c.flag} {c.name} (+{c.dial})</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <span className="sheet-country-name">{getCountry(sheetCountry).name}</span>
+                            </div>
+                          </div>
+                          <p className="hint">
+                            Rows are sent to Groq&apos;s AI to be read; the QR codes themselves are made in your browser. If the AI is unavailable, columns are matched by name instead.
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                  <>
                   <div className="form-section">
                     <SectionHead index="01" title="Personal" />
                     <div className="grid-2">
@@ -732,6 +958,8 @@ export default function Home() {
                       </div>
                     </div>
                   </div>
+                  </>
+                  )}
                 </>
               )}
 
@@ -817,12 +1045,14 @@ export default function Home() {
                 </div>
               )}
 
-              <button type="submit" className="btn-generate" disabled={uploadProgress !== null}>
-                <span className="btn-generate-label">{uploadProgress ? "Uploading" : "Generate"}</span>
+              <button type="submit" className="btn-generate" disabled={uploadProgress !== null || sheetProgress !== null}>
+                <span className="btn-generate-label">{uploadProgress ? "Uploading" : sheetProgress ? "Reading" : "Generate"}</span>
                 <span className="btn-generate-kbd">
                   {uploadProgress
                     ? `[ ${uploadProgress.total > 1 ? `${uploadProgress.done}/${uploadProgress.total} · ` : ""}${uploadProgress.percent}% ]`
-                    : "[ enter ↵ ]"}
+                    : sheetProgress
+                      ? `[ ${sheetProgress.done}/${sheetProgress.total} rows ]`
+                      : "[ enter ↵ ]"}
                 </span>
               </button>
             </form>
@@ -840,9 +1070,18 @@ export default function Home() {
                 generatedType === "image-batch" ? (
                   <div className="result" key={generationCount}>
                     <h2 className="result-title">Your codes</h2>
-                    <p className="result-meta">{imageResults.length} images · one code each · ecc m</p>
-                    <ImageBatchResults results={imageResults} />
+                    <p className="result-meta">{batchResults.length} images · one code each · ecc m</p>
+                    <BatchResults results={batchResults} />
                     <p className="hint scan-hint">Each code opens its image with a Save to Photos button.</p>
+                  </div>
+                ) : generatedType === "contact-batch" ? (
+                  <div className="result" key={generationCount}>
+                    <h2 className="result-title">Your cards</h2>
+                    <p className="result-meta">
+                      {batchResults.length} contacts{batchModels.length ? ` · read by ${batchModels.map((m) => m.split("/").pop()).join(", ")}` : ""} · ecc m
+                    </p>
+                    <BatchResults results={batchResults} zipPrefix="rapids-qr-cards" />
+                    <p className="hint scan-hint">Each code saves its contact when scanned with an iOS or Android camera.</p>
                   </div>
                 ) : (
                 <div className="result" key={generationCount}>
@@ -912,7 +1151,7 @@ export default function Home() {
           <AsciiWordmark />
           <div className="statusline">
             <span className="statusline-mode">-- static --</span>
-            <span>links &amp; contacts never leave your browser</span>
+            <span>single links &amp; cards never leave your browser</span>
             <span>© {new Date().getFullYear()} rapids qr</span>
           </div>
         </footer>

@@ -128,6 +128,25 @@ button {
   color: var(--fg-4);
 }
 
+.topbar-signout {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: var(--fg);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.topbar-signout:hover {
+  background: var(--fg);
+  color: var(--bg);
+  text-decoration: none;
+}
+
 /* ---------- Hero ---------- */
 .hero {
   padding-top: 40px;
@@ -826,6 +845,159 @@ button {
   color: var(--bg);
 }
 
+/* Contact mode switch (single card / batch from sheet) */
+.mode-switch {
+  display: inline-flex;
+  margin-bottom: 28px;
+  border: 1px solid var(--line-strong);
+}
+
+.mode-switch button {
+  padding: 9px 16px;
+  background: transparent;
+  border: none;
+  color: var(--fg-2);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background var(--fast), color var(--fast);
+}
+
+.mode-switch button + button {
+  border-left: 1px solid var(--line-strong);
+}
+
+.mode-switch button:hover {
+  color: var(--fg);
+  background: var(--wash-hover);
+}
+
+.mode-switch button.active {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+/* Uploaded spreadsheet */
+.sheet-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: var(--wash);
+  transition: border-color var(--fast);
+}
+
+.sheet-card.dragging {
+  border-color: var(--fg);
+}
+
+.sheet-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.sheet-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sheet-name {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-count {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.sheet-summary .image-actions {
+  margin-top: 0;
+}
+
+.sheet-preview {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+}
+
+.sheet-preview table {
+  border-collapse: collapse;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.sheet-preview th,
+.sheet-preview td {
+  padding: 7px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sheet-preview th {
+  font-weight: 400;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  background: var(--wash-hover);
+}
+
+.sheet-preview td:first-child,
+.sheet-preview th:first-child {
+  color: var(--fg-3);
+  border-right: 1px solid var(--line);
+}
+
+.sheet-preview tr:last-child td {
+  border-bottom: none;
+}
+
+.sheet-country {
+  max-width: 340px;
+}
+
+.sheet-country-name {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Contact rows in batch results */
+.batch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.batch-subtitle {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- Error ---------- */
 .error {
   display: flex;
@@ -1166,6 +1338,52 @@ button {
 
 .save-footer a:hover {
   color: var(--fg);
+}
+
+/* ---------- Sign-in page ---------- */
+.login-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.login-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0;
+}
+
+.login-panel {
+  width: 100%;
+  max-width: 420px;
+}
+
+.login-title {
+  font-family: var(--display);
+  font-weight: normal;
+  font-size: 2.8rem;
+  line-height: 1;
+}
+
+.login-sub {
+  margin: 10px 0 26px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.login-form .btn-generate {
+  margin-top: 10px;
+}
+
+.login-form .error {
+  margin-top: 0;
 }
 
 /* ---------- Motion ---------- */
